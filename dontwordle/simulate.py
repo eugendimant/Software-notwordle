@@ -49,13 +49,13 @@ class SimResult:
 
 
 def play_one(secret: str, config: GameConfig, policy, rng: random.Random,
-             use_undo: bool = True) -> DontWordleGame:
+             use_undo: bool = True, lang: str = "en") -> DontWordleGame:
     """Play one full game, backtracking with undos like a careful human.
 
     Keeps a per-depth memory of words already tried so undos explore new
     branches instead of looping on a doomed one.
     """
-    game = DontWordleGame(secret, words.allowed_guesses(), config, rng=rng)
+    game = DontWordleGame(secret, words.allowed_guesses(lang), config, rng=rng)
     tried: dict[int, set[str]] = defaultdict(set)
     while not game.is_over:
         depth = game.guesses_made
@@ -76,13 +76,14 @@ def play_one(secret: str, config: GameConfig, policy, rng: random.Random,
     return game
 
 
-def run(config: GameConfig, policy_name: str, n: int, seed: int = 0) -> SimResult:
+def run(config: GameConfig, policy_name: str, n: int, seed: int = 0,
+        lang: str = "en") -> SimResult:
     rng = random.Random(seed)
     policy = POLICIES[policy_name]
     res = SimResult()
-    pool = words.answers()
+    pool = words.answers(lang)
     for _ in range(n):
-        game = play_one(rng.choice(pool), config, policy, rng)
+        game = play_one(rng.choice(pool), config, policy, rng, lang=lang)
         res.played += 1
         res.survived += game.status is GameStatus.SURVIVED
         res.wordled += game.status is GameStatus.WORDLED
@@ -93,14 +94,15 @@ def run(config: GameConfig, policy_name: str, n: int, seed: int = 0) -> SimResul
 
 def main() -> None:
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 300
-    print(f"{'preset':<12}{'policy':<10}{'win rate':>9}{'avg undos':>11}"
-          f"{'avg score':>11}")
-    for key, cfg in PRESETS.items():
-        for pname in POLICIES:
-            r = run(cfg, pname, n, seed=42)
-            print(f"{key:<12}{pname:<10}{r.win_rate:>8.1%}"
-                  f"{r.undos / r.played:>11.2f}"
-                  f"{r.total_score / max(1, r.survived):>11.1f}")
+    print(f"{'lang':<6}{'preset':<12}{'policy':<10}{'win rate':>9}"
+          f"{'avg undos':>11}{'avg score':>11}")
+    for lang in words.LANGUAGES:
+        for key, cfg in PRESETS.items():
+            for pname in POLICIES:
+                r = run(cfg, pname, n, seed=42, lang=lang)
+                print(f"{lang:<6}{key:<12}{pname:<10}{r.win_rate:>8.1%}"
+                      f"{r.undos / r.played:>11.2f}"
+                      f"{r.total_score / max(1, r.survived):>11.1f}")
 
 
 if __name__ == "__main__":

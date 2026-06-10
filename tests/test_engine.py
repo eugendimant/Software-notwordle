@@ -74,11 +74,14 @@ def test_word_lists_load_and_nest():
 
 def test_daily_secret_is_deterministic_and_varies():
     d1 = datetime.date(2026, 6, 10)
-    d2 = datetime.date(2026, 6, 11)
-    assert words.daily_secret(d1) == words.daily_secret(d1)
-    week = {words.daily_secret(d1 + datetime.timedelta(days=i)) for i in range(7)}
+    assert words.daily_secret("en", d1) == words.daily_secret("en", d1)
+    week = {words.daily_secret("en", d1 + datetime.timedelta(days=i))
+            for i in range(7)}
     assert len(week) > 1
     assert all(w in words.answers() for w in week)
+    # languages get different daily words (with overwhelming probability)
+    langs = {lang: words.daily_secret(lang, d1) for lang in words.LANGUAGES}
+    assert len(set(langs.values())) > 1
 
 
 # ----------------------------------------------------------------------

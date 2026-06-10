@@ -176,6 +176,11 @@ class DontWordleGame:
     def safe_words(self) -> list[str]:
         return [w for w in self._pools[-1] if w != self.secret]
 
+    def pool_before(self, turn: int) -> list[str]:
+        """The playable pool as it was before guess number ``turn`` (0-based).
+        Useful for post-hoc move analysis."""
+        return self._pools[turn]
+
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
@@ -183,7 +188,7 @@ class DontWordleGame:
         """Return a human-readable rejection reason, or None if playable."""
         word = word.strip().lower()
         if len(word) != WORD_LENGTH or not word.isalpha():
-            return "Enter a five-letter word (A–Z only)."
+            return "Enter a five-letter word."
         if word not in self.dictionary:
             return f"“{word.upper()}” is not in the dictionary."
         if any(t.guess == word for t in self.history):

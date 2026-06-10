@@ -154,10 +154,75 @@ def test_stats_export_import_roundtrip():
                 '"bogus_mode": {"played": 1}}, "survival_best": 777}')
     payload = app_module.parse_stats_json(exported)
     assert payload["survival_best"] == 777
-    assert payload["stats"]["daily"]["best_score"] == 412
+    assert payload["stats"]["daily:en"]["best_score"] == 412
     assert "bogus_mode" not in payload["stats"]
     assert app_module.parse_stats_json("not json") is None
     assert app_module.parse_stats_json('{"stats": 7}') is None
+
+
+def test_language_switch_starts_fresh_game_in_that_dictionary():
+    from dontwordle import words as W
+    at = make_app()
+    at.selectbox(key="lang_select").set_value("de").run()
+    assert not at.exception
+    assert at.session_state["lang"] == "de"
+    game = at.session_state["game"]
+    assert game.secret in W.answers("de")
+    assert game.guesses_made == 0
+    # play a German word; stats land under the German key
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    assert at.session_state["game"].guesses_made == 1
+    # English word rejected by the German dictionary
+    guess(at, "crane")
+    assert at.session_state["message"][0] == "error"
+    assert at.session_state["game"].guesses_made == 1
+
+
+def test_spanish_accents_fold_to_dictionary_form():
+    at = make_app()
+    at.selectbox(key="lang_select").set_value("es").run()
+    assert not at.exception
+    game = at.session_state["game"]
+    game.secret = "salsa" if game.secret == "comun" else game.secret
+    if "comun" in game.remaining_words and game.secret != "comun":
+        guess(at, "común")  # typed with accent, dictionary stores 'comun'
+        assert at.session_state["game"].history[-1].guess == "comun"
+
+
+def test_live_rating_appears_and_tracks_undo():
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    ratings = at.session_state["ratings"]
+    assert len(ratings) == 1
+    assert ratings[0].word == safe
+    assert ratings[0].retained == at.session_state["game"].remaining_count
+    assert 0 <= ratings[0].percentile <= 100
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["ratings"] == []
+
+
+def test_post_game_review_lists_best_words():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    button(at, "Analyze my game").click()
+    at.run()
+    assert not at.exception
+    review = at.session_state["review"]
+    assert len(review) == 6
+    for r in review:
+        assert r.best_retained >= r.retained
+        assert r.best_word in at.session_state["game"].dictionary
+    blob = " ".join(str(md.value) for md in at.markdown)
+    assert "Best-move" in blob or "kept" in blob
 
 
 def test_losing_by_guessing_secret_then_undo_rescue():
@@ -167,7 +232,7 @@ def test_losing_by_guessing_secret_then_undo_rescue():
     game = at.session_state["game"]
     assert game.status is GameStatus.WORDLED
     # loss with undos left must NOT be recorded yet
-    assert at.session_state["stats"]["daily"]["played"] == 0
+    assert at.session_state["stats"]["daily:en"]["played"] == 0
     button(at, "↩️ Undo that fatal guess").click()
     at.run()
     assert not at.exception
@@ -190,7 +255,7 @@ def test_full_survival_win_flow():
         guess(at, word)  # known-good surviving line against CRANE
     game = at.session_state["game"]
     assert game.status is GameStatus.SURVIVED
-    assert at.session_state["stats"]["survival"]["survived"] == 1
+    assert at.session_state["stats"]["survival:en"]["survived"] == 1
     assert at.session_state["survival_total"] == game.score()
     # advance to round 2: one fewer undo
     button(at, "⚔️ Next round").click()
@@ -207,8 +272,8 @@ def test_mode_switch_resets_game_and_attributes_stats_to_old_mode():
     at.radio(key="mode_label").set_value("💀 Impossible").run()
     assert not at.exception
     # the abandoned daily loss must be recorded under 'daily'
-    assert at.session_state["stats"]["daily"]["played"] == 1
-    assert at.session_state["stats"]["daily"]["survived"] == 0
+    assert at.session_state["stats"]["daily:en"]["played"] == 1
+    assert at.session_state["stats"]["daily:en"]["survived"] == 0
     game = at.session_state["game"]
     assert game.config.label == "Impossible"
     assert game.config.max_undos == 0
