@@ -113,14 +113,19 @@ python -m pytest
 
 ## Changelog
 
-- **1.6.0.0** — frequency-weighted secrets: hidden words are drawn
+- **1.5.0.3** — strategy intel: 🧨 endgame trap forecast (once ≤30 words
+  remain, see how many of your playable words lead straight into a
+  trap — hidden in Impossible, where you're on your own); 🗒️ Zen word
+  browser (study the whole remaining pool while practicing); daily
+  completion screen shows a countdown to the next word.
+- **1.5.0.2** — frequency-weighted secrets: hidden words are drawn
   weighted by real spoken-language frequency (Zipf-style, 1/√rank — the
   common quartile supplies ~half of all games), so intuition about what
   people actually say becomes a strategy; all 12 answer lists reordered
   most-common-first; post-game reveal now appears after **wins** too,
   with the word's frequency rank ("a very common word, rank #123 of
   2,315"); how-to-play explains the weighting.
-- **1.5.1.0** — mobile UX overhaul for the clickable keyboard: keyboard
+- **1.5.0.1** — mobile UX overhaul for the clickable keyboard: keyboard
   rows now stay horizontal on phones (previously Streamlit stacked every
   letter into a full-width row, forcing endless scrolling); compact
   evenly-stretched keys sized for thumbs; ability buttons collapse into

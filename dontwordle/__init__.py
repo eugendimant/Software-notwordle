@@ -5,8 +5,8 @@ Every guess must respect all clues revealed so far, which slowly forces
 you toward the answer. Survive to win.
 """
 
-# four components: major.minor.feature.iteration — the last digit absorbs
-# rapid improvement loops so headline versions move slowly
-__version__ = "1.6.0.0"
+# four components, bumped right-to-left: the LAST digit increments with
+# every iteration; earlier digits move only for genuinely larger steps
+__version__ = "1.5.0.3"
 __author__ = "Eugen Dimant"
 __homepage__ = "https://eugendimant.github.io"
