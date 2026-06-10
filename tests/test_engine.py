@@ -74,13 +74,13 @@ def test_word_lists_load_and_nest():
 
 def test_daily_secret_is_deterministic_and_varies():
     d1 = datetime.date(2026, 6, 10)
-    assert words.daily_secret("en", d1) == words.daily_secret("en", d1)
-    week = {words.daily_secret("en", d1 + datetime.timedelta(days=i))
+    assert words.daily_secret("en", 5, d1) == words.daily_secret("en", 5, d1)
+    week = {words.daily_secret("en", 5, d1 + datetime.timedelta(days=i))
             for i in range(7)}
     assert len(week) > 1
     assert all(w in words.answers() for w in week)
     # languages get different daily words (with overwhelming probability)
-    langs = {lang: words.daily_secret(lang, d1) for lang in words.LANGUAGES}
+    langs = {lang: words.daily_secret(lang, 5, d1) for lang in words.LANGUAGES}
     assert len(set(langs.values())) > 1
 
 
@@ -117,7 +117,7 @@ def test_survival_win():
 
 def test_invalid_guesses_rejected(game):
     for bad, frag in [
-        ("cran", "five-letter"),
+        ("cran", "5-letter"),
         ("zzzzz", "not in the dictionary"),
     ]:
         with pytest.raises(InvalidGuess, match=frag):
@@ -230,6 +230,26 @@ def test_score_breakdown_zero_when_not_won(game):
     assert game.score_breakdown()["total"] == 0
     game.submit("crane")
     assert game.score_breakdown()["total"] == 0
+
+
+def test_share_text_singular_undo():
+    g = DontWordleGame("crane", words.allowed_guesses(),
+                       GameConfig("T", max_guesses=1, max_undos=5))
+    g.submit("stone")
+    g.undos_used = 1
+    assert "1 undo ·" in g.share_text()
+    g.undos_used = 2
+    assert "2 undos ·" in g.share_text()
+
+
+def test_score_floor_flagged():
+    g = DontWordleGame("crane", words.allowed_guesses(),
+                       GameConfig("T", max_guesses=1, max_undos=0,
+                                  max_hints=10, score_multiplier=0.25))
+    g.hints_used = 10  # -300 penalty drives raw score negative
+    g.submit("stone")
+    bd = g.score_breakdown()
+    assert bd["total"] == 10 and bd["floored"]
 
 
 def test_presets_sane():

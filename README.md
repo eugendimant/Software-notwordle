@@ -52,15 +52,22 @@ ends the run.
 Surviving with more 🟩/🟨 on the board scores higher; undos, hints and
 peeks cost points. Copy-paste emoji share cards included.
 
-## Languages
+## Languages & word lengths
 
-Play with 🇬🇧 English (14,855 words), 🇩🇪 German (11,623), 🇷🇺 Russian
-(8,126) or 🇪🇸 Spanish (12,891) dictionaries — the interface stays
-English. Secrets are curated common words (filtered against native
-dictionaries, English loan-words, names and profanity); each language
-has its own keyboard layout, daily word and stats. Input is normalized
-to dictionary conventions (Russian ё→е, Spanish accents fold, ñ stays
-distinct).
+Play with 🇬🇧 English, 🇩🇪 German, 🇷🇺 Russian or 🇪🇸 Spanish dictionaries —
+the interface stays English — and pick your board size: **4 letters
+(casual), 5 (classic) or 6 (expert)**. All twelve language×length
+combinations have their own curated dictionaries (filtered against
+native word lists, English loan-words, names and profanity), keyboard
+layouts, daily words and stats. Input is normalized to dictionary
+conventions (Russian ё→е, Spanish accents fold, ñ stays distinct).
+
+## Input your way
+
+Type your guess (Enter submits) or flip the sidebar switch to a fully
+**clickable on-screen keyboard** — letters you've eliminated grey out
+and lock, known letters glow green, and your picks preview live in the
+grid.
 
 ## Move analysis
 
@@ -90,9 +97,9 @@ dontwordle/
   words.py      word lists, daily/random secrets
   simulate.py   self-play balance harness (python -m dontwordle.simulate)
   analysis.py   numpy-vectorized move-quality analyzer
-  data/<lang>/  per-language secrets + playable words (en/de/ru/es)
+  data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
-tests/          ~80 tests: engine, analysis, self-play, AppTest UI
+tests/          ~100 tests: engine, analysis, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
@@ -106,6 +113,13 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.0** — word lengths 4/5/6 for every language (12 curated
+  dictionaries); optional clickable on-screen keyboard with live grid
+  preview, disabled eliminated letters and ⏎/⌫ keys; crash-proof widget
+  callbacks on cold sessions (cloud cache restarts); centered banners
+  and hardened header styling; move-rating pipeline capped-pool
+  rescaling (6-letter openings rated in <1s); legacy stats keys
+  auto-upgrade.
 - **1.4.0.1** — dual independent review pass: de/es/ru secret lists
   rebuilt (native-dictionary ∩ frequency, minus English words, names and
   profanity; Russian pool rebuilt from curated nouns — no more word

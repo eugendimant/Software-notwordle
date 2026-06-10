@@ -3,11 +3,10 @@
 import random
 import time
 
-import numpy as np
 import pytest
 
 from dontwordle import words as W
-from dontwordle.analysis import Analyzer, analyzer_for, pattern_id, rate_move
+from dontwordle.analysis import analyzer_for, pattern_id, rate_move
 from dontwordle.engine import DontWordleGame, PRESETS, score_guess
 
 
@@ -109,8 +108,73 @@ def test_new_language_dictionaries(lang):
     # daily secret is deterministic per language and differs across them
     import datetime
     d = datetime.date(2026, 6, 12)
-    assert W.daily_secret(lang, d) == W.daily_secret(lang, d)
-    assert W.daily_secret(lang, d) in ans
+    assert W.daily_secret(lang, 5, d) == W.daily_secret(lang, 5, d)
+    assert W.daily_secret(lang, 5, d) in ans
+
+
+@pytest.mark.parametrize("length", [4, 6])
+@pytest.mark.parametrize("lang", list(W.LANGUAGES))
+def test_multilength_dictionaries(lang, length):
+    allowed = W.allowed_guesses(lang, length)
+    ans = W.answers(lang, length)
+    assert len(allowed) > 2000
+    assert len(ans) >= 600
+    assert set(ans) <= allowed
+    assert all(len(w) == length for w in allowed)
+    import datetime
+    d = datetime.date(2026, 6, 13)
+    daily = W.daily_secret(lang, length, d)
+    assert daily == W.daily_secret(lang, length, d)
+    assert daily in ans and len(daily) == length
+    # keyboard rows must cover every letter used at this length
+    kbd = set("".join(W.KEYBOARDS[lang]))
+    assert {c for w in allowed for c in w} <= kbd
+
+
+@pytest.mark.parametrize("length", [4, 6])
+def test_engine_plays_other_lengths(length):
+    from dontwordle.engine import GameStatus
+    rng = random.Random(3)
+    secret = W.random_secret("en", length, rng)
+    g = DontWordleGame(secret, W.allowed_guesses("en", length),
+                       PRESETS["classic"], rng=rng)
+    assert g.word_length == length
+    import pytest as _pt
+    with _pt.raises(Exception, match=f"{length}-letter"):
+        g.submit("x" * (length + 1))
+    while not g.is_over:
+        if g.is_trapped and g.can_undo():
+            g.undo()
+            continue
+        pool = g.remaining_words
+        word = next((w for w in pool if w != secret), secret)
+        g.submit(word)
+    assert g.status in (GameStatus.SURVIVED, GameStatus.WORDLED)
+    assert all(len(t.guess) == length for t in g.history)
+
+
+@pytest.mark.parametrize("length", [4, 6])
+def test_vectorized_matches_scalar_other_lengths(length):
+    az = analyzer_for("en", length)
+    assert az.length == length
+    rng = random.Random(length)
+    sample = rng.sample(az.words, 200)
+    rows = az._rows(sample)
+    for _ in range(25):
+        guess = rng.choice(az.words)
+        codes = az.feedback_codes(guess, rows)
+        for w, code in zip(sample, codes):
+            assert code == pattern_id(score_guess(guess, w)), (guess, w)
+
+
+def test_rate_move_works_at_length_six():
+    az = analyzer_for("en", 6)
+    secret = W.answers("en", 6)[10]
+    pool = az.words
+    played = next(w for w in pool if w != secret)
+    r = rate_move(az, played, pool, secret, rng=random.Random(1))
+    assert r.pool_size == len(pool)
+    assert r.best_retained >= r.retained > 0
 
 
 def test_normalize_guess():

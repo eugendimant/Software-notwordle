@@ -20,8 +20,6 @@ import random
 from dataclasses import dataclass, field
 from enum import Enum
 
-WORD_LENGTH = 5
-
 GREEN = "G"
 YELLOW = "Y"
 GRAY = "-"
@@ -88,8 +86,8 @@ class GameConfig:
                 raise ValueError(f"{name} must be >= 0")
 
 
-# Built-in difficulty presets. max_undos=None in UI maps to a big number
-# here so the engine stays simple.
+# "Unlimited" budgets are a huge-but-finite number so the engine needs
+# no special cases; the UI renders anything this large as ∞.
 UNLIMITED = 10_000
 
 PRESETS: dict[str, GameConfig] = {
@@ -120,7 +118,8 @@ class DontWordleGame:
 
     def __post_init__(self) -> None:
         self.secret = self.secret.lower()
-        if len(self.secret) != WORD_LENGTH or self.secret not in self.dictionary:
+        self.word_length = len(self.secret)
+        if self.secret not in self.dictionary:
             raise ValueError(f"secret {self.secret!r} must be a playable word")
         self.history: list[TurnRecord] = []
         self.status = GameStatus.PLAYING
@@ -187,8 +186,8 @@ class DontWordleGame:
     def validate(self, word: str) -> str | None:
         """Return a human-readable rejection reason, or None if playable."""
         word = word.strip().lower()
-        if len(word) != WORD_LENGTH or not word.isalpha():
-            return "Enter a five-letter word."
+        if len(word) != self.word_length or not word.isalpha():
+            return f"Enter a {self.word_length}-letter word."
         if word not in self.dictionary:
             return f"“{word.upper()}” is not in the dictionary."
         if any(t.guess == word for t in self.history):
@@ -267,24 +266,27 @@ class DontWordleGame:
         """Itemized scoring, for display. All zeros unless the player won."""
         if self.status is not GameStatus.SURVIVED:
             return {"base": 0, "tiles": 0, "penalties": 0,
-                    "multiplier": self.config.score_multiplier, "total": 0}
+                    "multiplier": self.config.score_multiplier, "total": 0,
+                    "floored": False}
         tiles = sum(self.TILE_POINTS[c] for t in self.history for c in t.feedback)
         penalties = (self.undos_used * self.UNDO_COST
                      + self.hints_used * self.HINT_COST
                      + self.peeks_used * self.PEEK_COST)
-        raw = self.SURVIVAL_BONUS + tiles - penalties
-        total = max(10, round(raw * self.config.score_multiplier))
+        raw = round((self.SURVIVAL_BONUS + tiles - penalties)
+                    * self.config.score_multiplier)
         return {"base": self.SURVIVAL_BONUS, "tiles": tiles,
                 "penalties": penalties,
-                "multiplier": self.config.score_multiplier, "total": total}
+                "multiplier": self.config.score_multiplier,
+                "total": max(10, raw), "floored": raw < 10}
 
     EMOJI = {GREEN: "🟩", YELLOW: "🟨", GRAY: "⬜"}
 
     def share_text(self, title: str = "Don't Wordle") -> str:
         outcome = ("I SURVIVED 🎉" if self.status is GameStatus.SURVIVED
                    else "I Wordled 💀")
+        undo_word = "undo" if self.undos_used == 1 else "undos"
         lines = [f"{title} — {outcome}",
                  f"{self.guesses_made}/{self.config.max_guesses} guesses · "
-                 f"{self.undos_used} undos · score {self.score()}"]
+                 f"{self.undos_used} {undo_word} · score {self.score()}"]
         lines += ["".join(self.EMOJI[c] for c in t.feedback) for t in self.history]
         return "\n".join(lines)

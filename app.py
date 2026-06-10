@@ -43,7 +43,7 @@ MODE_HELP = {
     "daily": "One shared puzzle per day — same secret word for everyone. "
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
-    "hard": "6 guesses, only 2 undos, no hints. 1.5× score.",
+    "hard": "6 guesses, only 2 undos, no hints, 1 peek. 1.5× score.",
     "impossible": "SEVEN guesses to survive, zero undos, zero help. 2.5× score.",
     "survival": "Endless gauntlet: each round you lose one undo. "
                 "Scores stack with a rising multiplier. One loss ends the run.",
@@ -67,25 +67,34 @@ def survival_config(round_no: int) -> GameConfig:
 # Session state
 # ----------------------------------------------------------------------
 def _new_game(mode: str) -> DontWordleGame:
-    lang = st.session_state.lang
+    ss = st.session_state
+    lang, length = ss.lang, ss.word_len
     rng = random.Random()
     if mode == "daily":
-        secret = W.daily_secret(lang)
-        cfg = PRESETS["classic"]
+        import dataclasses
+        today = datetime.date.today()
+        secret = W.daily_secret(lang, length, today)
+        cfg = dataclasses.replace(PRESETS["classic"], label="Daily")
+        # pin the date at game creation so a session crossing midnight
+        # stays attributed to the day it started
+        ss.daily_key = f"{today.isoformat()}:{lang}:{length}"
         # deterministic helper rng so daily hints/peeks match across players
-        rng = random.Random(f"daily:{lang}:{datetime.date.today().isoformat()}")
+        rng = random.Random(f"daily:{lang}:{length}:{today.isoformat()}")
     elif mode == "survival":
-        cfg = survival_config(st.session_state.survival_round)
-        secret = W.random_secret(lang, rng)
+        cfg = survival_config(ss.survival_round)
+        secret = W.random_secret(lang, length, rng)
     else:
         cfg = PRESETS[mode]
-        secret = W.random_secret(lang, rng)
-    return DontWordleGame(secret, W.allowed_guesses(lang), cfg, rng=rng)
+        secret = W.random_secret(lang, length, rng)
+    return DontWordleGame(secret, W.allowed_guesses(lang, length), cfg, rng=rng)
 
 
 def init_state() -> None:
     ss = st.session_state
     ss.setdefault("lang", "en")
+    ss.setdefault("word_len", 5)
+    ss.setdefault("input_mode", "type")  # "type" | "click"
+    ss.setdefault("kbd_buffer", "")      # letters picked on the clickable kbd
     ss.setdefault("ratings", [])       # live MoveRating per row
     ss.setdefault("review", None)      # post-game best-move analysis
     ss.setdefault("last_action", None)  # drives reveal/shake animations
@@ -99,16 +108,17 @@ def init_state() -> None:
     ss.setdefault("peek_words", None)
     ss.setdefault("recorded", False)
     ss.setdefault("celebrated", False)
-    ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang"} already counted
+    ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang:len"} counted
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
 
 
-def mode_stats(mode: str, lang: str | None = None) -> dict:
-    lang = lang or st.session_state.lang
-    return st.session_state.stats.setdefault(
-        f"{mode}:{lang}", {"played": 0, "survived": 0, "streak": 0,
-                           "best_streak": 0, "best_score": 0})
+def mode_stats(mode: str) -> dict:
+    ss = st.session_state
+    key = f"{mode}:{ss.lang}:{ss.word_len}"
+    return ss.stats.setdefault(
+        key, {"played": 0, "survived": 0, "streak": 0,
+              "best_streak": 0, "best_score": 0})
 
 
 def record_result_if_final(force: bool = False) -> None:
@@ -122,7 +132,8 @@ def record_result_if_final(force: bool = False) -> None:
         return
     ss.recorded = True
     if ss.mode == "daily":
-        daily_key = f"{datetime.date.today().isoformat()}:{ss.lang}"
+        daily_key = ss.get("daily_key") or (
+            f"{datetime.date.today().isoformat()}:{ss.lang}:{ss.word_len}")
         if daily_key in ss.daily_done:
             return  # practice replay of a known word: don't farm stats
         ss.daily_done.add(daily_key)
@@ -144,10 +155,18 @@ def record_result_if_final(force: bool = False) -> None:
             ss.survival_best = max(ss.survival_best, ss.survival_total)
 
 
+def _ensure_state() -> None:
+    """Callbacks can fire on a brand-new session (server restart, cache
+    eviction) before the script body ran — never assume state exists."""
+    if "game" not in st.session_state:
+        init_state()
+
+
 # ----------------------------------------------------------------------
 # Actions (widget callbacks)
 # ----------------------------------------------------------------------
 def act_new_game(next_round: bool = False) -> None:
+    _ensure_state()
     ss = st.session_state
     record_result_if_final(force=True)
     if ss.mode == "survival":
@@ -164,10 +183,13 @@ def act_new_game(next_round: bool = False) -> None:
     ss.celebrated = False
     ss.ratings = []
     ss.review = None
+    ss.kbd_buffer = ""
+    ss.guess_input = ""  # don't carry a typed word into the new game
     ss.last_action = "new"
 
 
 def act_change_mode() -> None:
+    _ensure_state()
     ss = st.session_state
     record_result_if_final(force=True)  # attribute result to the old mode
     ss.mode = MODES[ss.mode_label]
@@ -177,6 +199,7 @@ def act_change_mode() -> None:
 
 
 def act_change_lang() -> None:
+    _ensure_state()
     ss = st.session_state
     record_result_if_final(force=True)  # attribute result to the old language
     ss.lang = ss.lang_select
@@ -185,13 +208,53 @@ def act_change_lang() -> None:
     act_new_game()
 
 
+def act_change_len() -> None:
+    _ensure_state()
+    ss = st.session_state
+    record_result_if_final(force=True)  # attribute result to the old length
+    ss.word_len = ss.len_select
+    ss.survival_round = 1
+    ss.survival_total = 0
+    act_new_game()
+
+
+def act_change_input() -> None:
+    _ensure_state()
+    ss = st.session_state
+    ss.input_mode = "click" if "Click" in ss.input_select else "type"
+    ss.kbd_buffer = ""
+
+
 def act_submit() -> None:
+    _ensure_state()
     word = st.session_state.get("guess_input", "").strip().lower()
     _process_guess(word, clear_input=True)
 
 
+def act_key(letter: str) -> None:
+    _ensure_state()
+    ss = st.session_state
+    if not ss.game.is_over and len(ss.kbd_buffer) < ss.game.word_length:
+        ss.kbd_buffer += letter
+
+
+def act_backspace() -> None:
+    _ensure_state()
+    ss = st.session_state
+    ss.kbd_buffer = ss.kbd_buffer[:-1]
+
+
+def act_kbd_enter() -> None:
+    _ensure_state()
+    ss = st.session_state
+    _process_guess(ss.kbd_buffer)
+    if ss.last_action == "guess":
+        ss.kbd_buffer = ""
+
+
 def act_accept_fate() -> None:
     """Trapped with no way out — play the only word left and take the L."""
+    _ensure_state()
     _process_guess(st.session_state.game.secret)
 
 
@@ -215,10 +278,14 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     # (same seed/sample as act_review so live and review grades agree)
     row = game.guesses_made - 1
     ss.ratings.append(A.rate_move(
-        A.analyzer_for(ss.lang), word, game.pool_before(row), game.secret,
-        rng=random.Random(f"{game.secret}:{row}"), sample_size=400))
+        A.analyzer_for(ss.lang, game.word_length), word,
+        game.pool_before(row), game.secret,
+        rng=random.Random(f"{game.secret}:{row}"), sample_size=400,
+        actual_retained=game.remaining_count))
     ss.hint_word = None
     ss.peek_words = None
+    if game.is_over:
+        ss.kbd_buffer = ""  # nothing left to type on a finished board
     if game.status is GameStatus.WORDLED:
         ss.message = ("loss", f"💀 You Wordled! “{word.upper()}” was the "
                               "hidden word." +
@@ -243,14 +310,22 @@ def act_random_start() -> None:
     """Fill the box with a random opening word (first guess only, like the
     original's 'Random Starting Word'). Mid-game randomness could land on
     the secret itself, so it is deliberately unavailable after turn one."""
+    _ensure_state()
     ss = st.session_state
     game: DontWordleGame = ss.game
     if not game.is_over and game.guesses_made == 0:
         _reseed_daily_rng("random-start")
-        ss.guess_input = game.rng.choice(game.remaining_words)
+        # never suggest the secret: with the deterministic daily seed it
+        # would hand every player the losing word on unlucky dates
+        word = game.rng.choice(game.safe_words())
+        if ss.input_mode == "click":
+            ss.kbd_buffer = word
+        else:
+            ss.guess_input = word
 
 
 def act_undo() -> None:
+    _ensure_state()
     ss = st.session_state
     ss.last_action = "undo"
     if ss.game.undo():
@@ -266,12 +341,14 @@ def act_undo() -> None:
 
 def act_review() -> None:
     """Post-game: find the best word for every row (exact where feasible)."""
+    _ensure_state()
     ss = st.session_state
     game: DontWordleGame = ss.game
-    az = A.analyzer_for(ss.lang)
+    az = A.analyzer_for(ss.lang, game.word_length)
     ss.review = [
         A.rate_move(az, t.guess, game.pool_before(i), game.secret,
-                    rng=random.Random(f"{game.secret}:{i}"), sample_size=400)
+                    rng=random.Random(f"{game.secret}:{i}"), sample_size=400,
+                    actual_retained=len(game.pool_before(i + 1)))
         for i, t in enumerate(game.history)
     ]
 
@@ -281,11 +358,13 @@ def _reseed_daily_rng(facility: str) -> None:
     regardless of the order they use them in."""
     ss = st.session_state
     if ss.mode == "daily":
-        ss.game.rng.seed(f"daily:{ss.lang}:{datetime.date.today().isoformat()}"
+        # daily_key was pinned at game creation: stable across midnight
+        ss.game.rng.seed(f"daily:{ss.get('daily_key')}"
                          f":{facility}:{ss.game.guesses_made}")
 
 
 def act_hint() -> None:
+    _ensure_state()
     ss = st.session_state
     _reseed_daily_rng("hint")
     h = ss.game.hint()
@@ -297,13 +376,14 @@ def act_hint() -> None:
 
 
 def act_peek() -> None:
+    _ensure_state()
     ss = st.session_state
     _reseed_daily_rng("peek")
     sample = ss.game.peek()
     if sample:
         ss.peek_words = sample
-        ss.message = ("warn", "👁️ Peek: 5 of the remaining words — "
-                              "the hidden word might be among them!")
+        ss.message = ("warn", f"👁️ Peek: {len(sample)} of the remaining "
+                              "words — the hidden word might be among them!")
     else:
         ss.message = ("error", "No peek available.")
 
@@ -324,19 +404,30 @@ def export_stats_json() -> str:
 def parse_stats_json(text: str) -> dict | None:
     """Validate an exported stats file. Returns clean payload or None."""
     def valid_key(key: str) -> str | None:
-        mode, _, lang = key.partition(":")
-        lang = lang or "en"  # pre-1.4 exports were English-only
-        if mode in MODES.values() and lang in W.LANGUAGES:
-            return f"{mode}:{lang}"
+        parts = key.split(":")
+        if len(parts) > 3:
+            return None
+        # legacy exports: "mode" (≤1.3, English only) or "mode:lang" (1.4.0)
+        mode = parts[0]
+        lang = parts[1] if len(parts) > 1 else "en"
+        length = parts[2] if len(parts) > 2 else "5"
+        if (mode in MODES.values() and lang in W.LANGUAGES
+                and length.isdigit() and int(length) in W.WORD_LENGTHS):
+            return f"{mode}:{lang}:{int(length)}"
         return None
 
     try:
         data = json.loads(text)
-        clean = {
-            valid_key(key): {k: max(0, int(s.get(k, 0))) for k in STAT_KEYS}
-            for key, s in data["stats"].items()
-            if valid_key(key) and isinstance(s, dict)
-        }
+        clean: dict[str, dict] = {}
+        for key, s in data["stats"].items():
+            norm = valid_key(key)
+            if not norm or not isinstance(s, dict):
+                continue
+            incoming = {k: max(0, int(s.get(k, 0))) for k in STAT_KEYS}
+            if norm in clean:  # legacy + new key collided: keep the best
+                incoming = {k: max(incoming[k], clean[norm][k])
+                            for k in STAT_KEYS}
+            clean[norm] = incoming
         return {"stats": clean,
                 "survival_best": max(0, int(data.get("survival_best", 0)))}
     except (ValueError, TypeError, KeyError, AttributeError):
@@ -357,15 +448,15 @@ CSS = """
 <style>
 .block-container {max-width: 720px;}
 .dw-header {text-align:center; margin:-12px 0 2px 0;}
-.dw-header h1 {font-family:'Helvetica Neue',Arial,sans-serif;
-               font-weight:900; letter-spacing:0.16em; font-size:2.0rem;
-               margin:0;}
-.dw-header h1 .no {color:#e74c3c;}
-.dw-header h1 .word {background:linear-gradient(90deg,#6aaa64,#b59f3b);
-                     -webkit-background-clip:text; background-clip:text;
-                     -webkit-text-fill-color:transparent;}
+.dw-title {font-family:'Helvetica Neue',Arial,sans-serif; font-weight:900;
+           letter-spacing:0.16em; font-size:2.0rem; line-height:1.2;}
+.dw-title .no {color:#e74c3c;}
+.dw-title .word {color:#6aaa64;}
 .dw-header p {margin:0; opacity:0.65; font-size:0.85rem;
               letter-spacing:0.28em; text-transform:uppercase;}
+.dw-banner {text-align:center; font-weight:700; font-size:1.05rem;
+            margin:2px 0 6px 0;}
+.dw-banner .sub {opacity:0.7; font-weight:400; font-size:0.9rem;}
 .dw-board {display:flex; flex-direction:column; gap:6px; align-items:center;
            margin: 10px 0 4px 0;}
 .dw-row {display:flex; gap:6px;}
@@ -382,6 +473,7 @@ CSS = """
 .dw-row.dw-reveal .dw-tile:nth-child(3) {animation-delay:.20s;}
 .dw-row.dw-reveal .dw-tile:nth-child(4) {animation-delay:.30s;}
 .dw-row.dw-reveal .dw-tile:nth-child(5) {animation-delay:.40s;}
+.dw-row.dw-reveal .dw-tile:nth-child(6) {animation-delay:.50s;}
 @keyframes dw-flip {
   0%   {transform:rotateX(90deg); opacity:0.2;}
   100% {transform:rotateX(0deg); opacity:1;}
@@ -412,21 +504,30 @@ CSS = """
 @keyframes dw-pulse {50% {opacity:0.45;}}
 .dw-footer {text-align:center; opacity:0.8; font-size:0.85rem;
             margin-top:18px;}
+@media (max-width: 480px) {
+  .dw-tile {width:44px; height:44px; font-size:1.4rem;}
+  .dw-row {gap:4px;}
+  .dw-key {min-width:24px; height:34px; font-size:0.85rem;}
+}
+@media (max-width: 380px) {
+  .dw-tile {width:38px; height:38px; font-size:1.2rem;}
+}
 </style>
 """
 
 HEADER = """
 <div class="dw-header">
-  <h1><span class="no">DON'T</span> <span class="word">WORDLE</span></h1>
+  <div class="dw-title"><span class="no">DON'T</span> <span class="word">WORDLE</span></div>
   <p>guess words — never the word</p>
 </div>
 """
 
 
-def render_board(game: DontWordleGame, animate_last: bool = False,
-                 shake: bool = False) -> str:
+def render_board(game: DontWordleGame, buffer: str = "",
+                 animate_last: bool = False, shake: bool = False) -> str:
     rows = []
     last = len(game.history) - 1
+    width = game.word_length
     for i, turn in enumerate(game.history):
         tiles = "".join(
             f'<div class="dw-tile" style="background:{TILE_COLORS[c]}">{l}</div>'
@@ -435,9 +536,12 @@ def render_board(game: DontWordleGame, animate_last: bool = False,
         cls = "dw-row dw-reveal" if (animate_last and i == last) else "dw-row"
         rows.append(f'<div class="{cls}">{tiles}</div>')
     for j in range(game.guesses_left):
-        tile_cls = "dw-tile dw-empty" + (" dw-active" if j == 0 else "")
-        tiles = f'<div class="{tile_cls}"></div>' * 5
-        rows.append(f'<div class="dw-row">{tiles}</div>')
+        cells = []
+        for k in range(width):
+            letter = buffer[k] if j == 0 and k < len(buffer) else ""
+            cls = "dw-tile dw-empty" + (" dw-active" if j == 0 else "")
+            cells.append(f'<div class="{cls}">{letter}</div>')
+        rows.append(f'<div class="dw-row">{"".join(cells)}</div>')
     board_cls = "dw-board dw-shake" if shake else "dw-board"
     return f'<div class="{board_cls}">{"".join(rows)}</div>'
 
@@ -498,6 +602,32 @@ def render_meter(game: DontWordleGame) -> str:
             f'style="width:{pct:.1f}%;background:{color}"></div></div>')
 
 
+def render_click_keyboard(game: DontWordleGame, lang: str) -> None:
+    """Clickable on-screen keyboard (st.buttons). Letters keep their clue
+    color knowledge: eliminated letters are disabled, known letters green."""
+    know = letter_knowledge(game)
+    for r, row in enumerate(W.KEYBOARDS[lang]):
+        extras = 2 if r == len(W.KEYBOARDS[lang]) - 1 else 0
+        cols = st.columns(len(row) + extras, gap="small")
+        offset = 0
+        if extras:
+            cols[0].button("⏎", key="kbd_enter", on_click=act_kbd_enter,
+                           width="stretch", disabled=game.is_over,
+                           help="Submit the word")
+            offset = 1
+        for i, letter in enumerate(row):
+            status = know.get(letter)
+            cols[i + offset].button(
+                letter.upper(), key=f"kbd_{letter}",
+                on_click=act_key, args=(letter,),
+                type="primary" if status in (GREEN, YELLOW) else "secondary",
+                disabled=game.is_over or status == GRAY,
+                width="stretch")
+        if extras:
+            cols[-1].button("⌫", key="kbd_back", on_click=act_backspace,
+                            width="stretch", disabled=game.is_over)
+
+
 def show_message() -> None:
     msg = st.session_state.message
     if not msg:
@@ -513,6 +643,8 @@ def show_message() -> None:
 def share_title() -> str:
     ss = st.session_state
     tag = "" if ss.lang == "en" else f" {W.LANGUAGES[ss.lang]}"
+    if ss.word_len != 5:
+        tag += f" ({ss.word_len} letters)"
     if ss.mode == "daily":
         return f"Don't Wordle Daily {datetime.date.today().isoformat()}{tag}"
     if ss.mode == "survival":
@@ -535,13 +667,24 @@ def main() -> None:
     # ----- sidebar ----------------------------------------------------
     with st.sidebar:
         st.title("🙅 DON'T Wordle")
-        st.caption("Six guesses. Don't say the word.")
+        st.caption("Whatever you do — don't say the word.")
         langs = list(W.LANGUAGES)
-        st.selectbox("Dictionary language", langs,
+        c1, c2 = st.columns([3, 2])
+        c1.selectbox("Language", langs,
                      index=langs.index(ss.lang), key="lang_select",
                      format_func=W.LANGUAGES.get, on_change=act_change_lang,
                      help="Word lists change; the interface stays English. "
                           "Changing language starts a fresh game.")
+        lengths = list(W.WORD_LENGTHS)
+        c2.selectbox("Letters", lengths,
+                     index=lengths.index(ss.word_len), key="len_select",
+                     on_change=act_change_len,
+                     help="Word length: 4 = casual, 5 = classic, "
+                          "6 = expert. Changing it starts a fresh game.")
+        st.radio("Input method", ["⌨️ Typing", "🔠 Clickable letters"],
+                 index=0 if ss.input_mode == "type" else 1,
+                 key="input_select", on_change=act_change_input,
+                 horizontal=True)
         labels = list(MODES)
         current = next(k for k, v in MODES.items() if v == ss.mode)
         st.radio("Game mode", labels, index=labels.index(current),
@@ -566,7 +709,8 @@ def main() -> None:
         never_played = not any(s["played"] for s in ss.stats.values())
         with st.expander("📖 How to play", expanded=never_played):
             st.markdown(
-                "- Guess five-letter words — but **never** the hidden word.\n"
+                f"- Guess {ss.word_len}-letter words — but **never** the "
+                "hidden word.\n"
                 "- Every guess must obey all clues so far: 🟩 greens stay "
                 "in place, 🟨 yellows must be re-used, ⬜ grays are "
                 "forbidden.\n"
@@ -611,22 +755,30 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    # ----- header / survival banner -----------------------------------
+    # ----- header / survival banner (centered like everything else) ----
     if ss.mode == "survival":
         st.markdown(
-            f"#### ⚔️ Round {ss.survival_round} · run score "
-            f"**{ss.survival_total}** · "
-            f"{game.config.max_undos} undo(s) this round"
-        )
+            f'<div class="dw-banner">⚔️ Round {ss.survival_round} · '
+            f'run score {ss.survival_total} <span class="sub">· '
+            f'{game.config.max_undos} undo(s) this round</span></div>',
+            unsafe_allow_html=True)
     elif ss.mode == "daily":
-        st.markdown(f"#### 📅 Daily Challenge — "
-                    f"{datetime.date.today():%B %d, %Y}")
+        st.markdown(
+            f'<div class="dw-banner">📅 Daily Challenge '
+            f'<span class="sub">— {datetime.date.today():%B %d, %Y}'
+            f'</span></div>', unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
-    st.markdown(render_board(game, animate_last=ss.last_action == "guess",
+    buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
+    st.markdown(render_board(game, buffer=buffer,
+                             animate_last=ss.last_action == "guess",
                              shake=ss.last_action == "error"),
                 unsafe_allow_html=True)
-    st.markdown(render_keyboard(game, ss.lang), unsafe_allow_html=True)
+    if ss.input_mode == "click":
+        if not game.is_over:
+            render_click_keyboard(game, ss.lang)
+    else:
+        st.markdown(render_keyboard(game, ss.lang), unsafe_allow_html=True)
 
     show_message()
     if ss.ratings and not game.is_over:
@@ -634,8 +786,7 @@ def main() -> None:
         st.caption(
             f"Move {len(ss.ratings)} safety: **{r.grade}** — kept "
             f"**{r.retained:,}** of {r.pool_size:,} words, outperformed "
-            f"{r.percentile:.0f}% of your options"
-            f"{'' if r.exact else ' (estimated)'}")
+            f"{'~' if not r.exact else ''}{r.percentile:.0f}% of your options")
     if ss.hint_word and not game.is_over:
         st.info(f"🛟 Safe word: **{ss.hint_word.upper()}**")
     if ss.peek_words and not game.is_over:
@@ -643,13 +794,16 @@ def main() -> None:
 
     # ----- controls ----------------------------------------------------
     if not game.is_over:
-        with st.form("guess_form", clear_on_submit=False, border=False):
-            c1, c2 = st.columns([4, 1])
-            c1.text_input("Your guess", key="guess_input", max_chars=5,
-                          placeholder="type a five-letter word…",
-                          label_visibility="collapsed")
-            c2.form_submit_button("Guess", on_click=act_submit,
-                                  type="primary", width="stretch")
+        if ss.input_mode == "type":
+            with st.form("guess_form", clear_on_submit=False, border=False):
+                c1, c2 = st.columns([4, 1])
+                c1.text_input("Your guess", key="guess_input",
+                              max_chars=game.word_length,
+                              placeholder=f"type a {game.word_length}-letter "
+                                          "word…",
+                              label_visibility="collapsed")
+                c2.form_submit_button("Guess", on_click=act_submit,
+                                      type="primary", width="stretch")
         # only show abilities the current mode actually has
         actions = []
         if game.config.max_undos > 0:
@@ -680,9 +834,12 @@ def main() -> None:
                 ss.celebrated = True
             bd = game.score_breakdown()
             st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+            floor_note = " — floored at the 10-point minimum" \
+                if bd["floored"] else ""
             st.caption(f"{bd['base']} survival + {bd['tiles']} tile points "
                        f"− {bd['penalties']} help penalties, "
-                       f"× {bd['multiplier']:g} {game.config.label} bonus")
+                       f"× {bd['multiplier']:g} {game.config.label} bonus"
+                       f"{floor_note}")
         else:
             st.error(f"💀 **You Wordled.** The hidden word was "
                      f"**{game.secret.upper()}**.")
@@ -711,7 +868,9 @@ def main() -> None:
                     elif r.fatal:
                         verdict = "**that was the hidden word**"
                     elif r.word == r.best_word and r.pool_size > 1:
-                        verdict = "**perfect — nothing kept more**"
+                        verdict = ("**perfect — nothing kept more**"
+                                   if r.exact else
+                                   "**best of the sampled options**")
                     else:
                         verdict = (f"best: **{r.best_word.upper()}** "
                                    f"would have kept **{r.best_retained:,}**"
