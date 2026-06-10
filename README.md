@@ -113,6 +113,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.1.0** — mobile UX overhaul for the clickable keyboard: keyboard
+  rows now stay horizontal on phones (previously Streamlit stacked every
+  letter into a full-width row, forcing endless scrolling); compact
+  evenly-stretched keys sized for thumbs; ability buttons collapse into
+  one compact row; guess box and button stay side by side; shorter
+  "Random start" label.
 - **1.5.0.0** — word lengths 4/5/6 for every language (12 curated
   dictionaries); optional clickable on-screen keyboard with live grid
   preview, disabled eliminated letters and ⏎/⌫ keys; crash-proof widget
