@@ -1,0 +1,219 @@
+"""Unit tests for the Don't Wordle engine."""
+
+import datetime
+import random
+
+import pytest
+
+from dontwordle import words
+from dontwordle.engine import (
+    PRESETS,
+    DontWordleGame,
+    GameConfig,
+    GameStatus,
+    InvalidGuess,
+    is_consistent,
+    score_guess,
+)
+
+
+# ----------------------------------------------------------------------
+# Feedback algorithm (the classic duplicate-letter minefield)
+# ----------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "guess,secret,expected",
+    [
+        ("crane", "crane", "GGGGG"),
+        ("stone", "crane", "---GG"),
+        ("speed", "abide", "--Y-Y"),   # one E in secret -> first E yellow only
+        ("speed", "erase", "Y-YY-"),   # two Es in secret, none positioned
+        ("allee", "level", "-YYGY"),
+        ("loops", "spool", "YYGYY"),
+        ("aaaaa", "abase", "G-G--"),
+        ("abase", "aaaaa", "G-G--"),
+    ],
+)
+def test_score_guess_cases(guess, secret, expected):
+    assert score_guess(guess, secret) == expected
+
+
+def test_score_guess_duplicate_accounting():
+    # secret has one 'e'; guess has three -> exactly one colored
+    fb = score_guess("eeeee", "abide")
+    assert fb.count("G") + fb.count("Y") == 1
+    # green consumes the duplicate budget first
+    fb = score_guess("eexxe", "exeee")  # secret has 4 e's
+    assert fb[0] == "G"
+
+
+def test_score_symmetric_length_check():
+    with pytest.raises(ValueError):
+        score_guess("abc", "abcde")
+
+
+def test_consistency_secret_always_consistent_with_own_feedback():
+    rng = random.Random(42)
+    pool = words.answers()
+    for _ in range(200):
+        secret, guess = rng.choice(pool), rng.choice(pool)
+        fb = score_guess(guess, secret)
+        assert is_consistent(secret, guess, fb)
+
+
+# ----------------------------------------------------------------------
+# Word lists
+# ----------------------------------------------------------------------
+def test_word_lists_load_and_nest():
+    allowed = words.allowed_guesses()
+    ans = words.answers()
+    assert len(allowed) > 10_000
+    assert len(ans) > 2_000
+    assert set(ans) <= allowed
+    assert all(len(w) == 5 and w.isalpha() and w.islower() for w in ans)
+
+
+def test_daily_secret_is_deterministic_and_varies():
+    d1 = datetime.date(2026, 6, 10)
+    d2 = datetime.date(2026, 6, 11)
+    assert words.daily_secret(d1) == words.daily_secret(d1)
+    week = {words.daily_secret(d1 + datetime.timedelta(days=i)) for i in range(7)}
+    assert len(week) > 1
+    assert all(w in words.answers() for w in week)
+
+
+# ----------------------------------------------------------------------
+# Game flow
+# ----------------------------------------------------------------------
+@pytest.fixture()
+def game():
+    return DontWordleGame(
+        secret="crane",
+        dictionary=words.allowed_guesses(),
+        config=PRESETS["classic"],
+        rng=random.Random(7),
+    )
+
+
+def test_instant_loss_on_secret(game):
+    game.submit("crane")
+    assert game.status is GameStatus.WORDLED
+    assert game.score() == 0
+
+
+def test_survival_win():
+    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["classic"],
+                       rng=random.Random(1))
+    for _ in range(g.config.max_guesses):
+        assert g.status is GameStatus.PLAYING
+        g.submit(next(w for w in g.remaining_words if w != "crane"))
+    assert g.status is GameStatus.SURVIVED
+    assert g.score() > 0
+    txt = g.share_text()
+    assert "SURVIVED" in txt and txt.count("\n") == 2 + g.config.max_guesses - 1
+
+
+def test_invalid_guesses_rejected(game):
+    for bad, frag in [
+        ("cran", "five-letter"),
+        ("zzzzz", "not in the dictionary"),
+    ]:
+        with pytest.raises(InvalidGuess, match=frag):
+            game.submit(bad)
+    game.submit("stone")
+    with pytest.raises(InvalidGuess, match="already played"):
+        game.submit("stone")
+    # 'stone' vs 'crane': n yellow, e green -> a gray-violating word rejected
+    with pytest.raises(InvalidGuess, match="breaks the clues"):
+        game.submit("toast")
+    assert game.guesses_made == 1
+
+
+def test_clue_filtering_shrinks_pool_and_keeps_secret(game):
+    before = game.remaining_count
+    game.submit("stone")
+    assert game.remaining_count < before
+    assert "crane" in game.remaining_words
+    # played word can never be guessed again: it's filtered out
+    assert "stone" not in game.remaining_words
+
+
+def test_undo_restores_everything(game):
+    base_pool = list(game.remaining_words)
+    game.submit("stone")
+    assert game.undo()
+    assert game.history == []
+    assert game.remaining_words == base_pool
+    assert game.undos_used == 1
+    assert game.undos_left == game.config.max_undos - 1
+
+
+def test_undo_can_revert_a_loss(game):
+    game.submit("crane")
+    assert game.status is GameStatus.WORDLED
+    assert game.undo()
+    assert game.status is GameStatus.PLAYING
+
+
+def test_undo_limits():
+    cfg = GameConfig("Test", max_guesses=6, max_undos=1)
+    g = DontWordleGame("crane", words.allowed_guesses(), cfg)
+    assert not g.undo()           # nothing to undo
+    g.submit("stone")
+    assert g.undo()
+    g.submit("stone")
+    assert not g.undo()           # budget exhausted
+    assert g.undos_left == 0
+
+
+def test_no_undo_after_win():
+    g = DontWordleGame("crane", words.allowed_guesses(),
+                       GameConfig("T", max_guesses=1, max_undos=5))
+    g.submit("stone")
+    assert g.status is GameStatus.SURVIVED
+    assert not g.undo()
+
+
+def test_hint_is_safe_and_limited(game):
+    h = game.hint()
+    assert h in game.remaining_words and h != game.secret
+    assert game.hints_left == 0
+    assert game.hint() is None
+
+
+def test_peek_samples_remaining(game):
+    sample = game.peek()
+    assert 1 <= len(sample) <= 5
+    assert all(w in game.remaining_words for w in sample)
+    assert game.peek() == []      # budget spent
+
+
+def test_trapped_detection():
+    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    assert not g.is_trapped
+    g._pools.append(["crane"])    # force endgame state directly
+    assert g.is_trapped
+    assert g.safe_words() == []
+
+
+def test_score_components():
+    g = DontWordleGame("crane", words.allowed_guesses(),
+                       GameConfig("T", max_guesses=1, max_undos=5))
+    g.submit("brand")             # vs CRANE -> -GGG-
+    assert g.status is GameStatus.SURVIVED
+    fb = g.history[0].feedback
+    expected = 100 + sum(g.TILE_POINTS[c] for c in fb)
+    assert g.score() == expected
+
+
+def test_presets_sane():
+    for key, cfg in PRESETS.items():
+        assert cfg.max_guesses >= 6
+        assert cfg.max_undos >= 0
+    assert PRESETS["hard"].max_undos < PRESETS["classic"].max_undos
+    with pytest.raises(ValueError):
+        GameConfig(max_guesses=0)
+
+
+def test_bad_secret_rejected():
+    with pytest.raises(ValueError):
+        DontWordleGame("xyzzy!", words.allowed_guesses())
