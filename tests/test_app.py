@@ -417,6 +417,69 @@ def test_win_reveals_secret_and_frequency():
     assert "frequency rank" in blob
 
 
+def test_trap_forecast_matches_brute_force():
+    from dontwordle.engine import score_guess
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate"):
+        guess(at, word)
+    game = at.session_state["game"]
+    pool = game.remaining_words
+    assert 2 <= len(pool) <= 30 and game.guesses_left >= 2
+    expected_traps = sum(
+        1 for w in pool if w != "crane"
+        and sum(score_guess(w, v) == score_guess(w, "crane")
+                for v in pool) == 1)
+    blob = " ".join(str(el.value) for el in at.warning) + \
+           " ".join(str(el.value) for el in at.info)
+    assert "Endgame intel" in blob
+    if expected_traps:
+        assert f"{expected_traps} of your" in blob or "every one" in blob
+    else:
+        assert "none of your" in blob
+
+
+def test_no_trap_forecast_in_impossible_mode():
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game._pools.append(["crane", "crape", "crare"])  # tiny endgame pool
+    at.run()
+    assert not at.exception
+    blob = " ".join(str(el.value) for el in at.warning) + \
+           " ".join(str(el.value) for el in at.info)
+    assert "Endgame intel" not in blob
+
+
+def test_zen_word_browser_lists_pool():
+    at = make_app()
+    at.radio(key="mode_label").set_value("🧘 Zen").run()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game._pools.append(["crane", "crape", "crare"])
+    at.run()
+    assert not at.exception
+    blob = " ".join(str(el.value) for el in at.expander[-1].markdown) \
+        if at.expander else ""
+    page = blob + " ".join(str(md.value) for md in at.markdown)
+    assert "CRAPE" in page and "CRARE" in page
+    # the browser is a zen perk: classic must not show it
+    at.radio(key="mode_label").set_value("🎲 Classic").run()
+    game = at.session_state["game"]
+    game._pools.append([game.secret])
+    at.run()
+    page = " ".join(str(md.value) for md in at.markdown)
+    assert "Browse all" not in page
+
+
+def test_next_daily_countdown_format():
+    import re
+    import app as app_module
+    assert re.fullmatch(r"\d{1,2}h \d{2}m", app_module.next_daily_in())
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret
