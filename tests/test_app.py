@@ -6,7 +6,6 @@ switching modes — and assert on the resulting session state.
 
 from pathlib import Path
 
-import pytest
 from streamlit.testing.v1 import AppTest
 
 from dontwordle.engine import GameStatus
@@ -100,7 +99,9 @@ def test_random_starting_word_first_turn_only():
     at.run()
     assert not at.exception
     filled = at.session_state["guess_input"]
-    assert filled in at.session_state["game"].remaining_words
+    game = at.session_state["game"]
+    assert filled in game.remaining_words
+    assert filled != game.secret  # must never hand the player the secret
     # after the first guess the random button must disappear
     game = at.session_state["game"]
     safe = next(w for w in game.remaining_words if w != game.secret)
@@ -154,14 +155,130 @@ def test_stats_export_import_roundtrip():
                 '"bogus_mode": {"played": 1}}, "survival_best": 777}')
     payload = app_module.parse_stats_json(exported)
     assert payload["survival_best"] == 777
-    assert payload["stats"]["daily:en"]["best_score"] == 412
+    assert payload["stats"]["daily:en:5"]["best_score"] == 412
     assert "bogus_mode" not in payload["stats"]
     assert app_module.parse_stats_json("not json") is None
     assert app_module.parse_stats_json('{"stats": 7}') is None
 
 
-def test_language_switch_starts_fresh_game_in_that_dictionary():
+def test_word_length_switch_starts_fresh_game():
     from dontwordle import words as W
+    at = make_app()
+    at.selectbox(key="len_select").set_value(6).run()
+    assert not at.exception
+    assert at.session_state["word_len"] == 6
+    game = at.session_state["game"]
+    assert game.word_length == 6
+    assert game.secret in W.answers("en", 6)
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    assert at.session_state["game"].guesses_made == 1
+    # five-letter word rejected on a six-letter board
+    guess(at, "crane")
+    assert at.session_state["message"][0] == "error"
+    # switching length again starts a fresh 4-letter board
+    at.selectbox(key="len_select").set_value(4).run()
+    assert at.session_state["game"].word_length == 4
+
+
+def test_clickable_keyboard_full_flow():
+    at = make_app()
+    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
+    assert not at.exception
+    assert at.session_state["input_mode"] == "click"
+    game = at.session_state["game"]
+    game.secret = "crane"
+    # click out 's','t','o','n','e' then submit with ⏎
+    for letter in "stone":
+        at.button(key=f"kbd_{letter}").click()
+        at.run()
+        assert not at.exception
+    assert at.session_state["kbd_buffer"] == "stone"
+    at.button(key="kbd_back").click()
+    at.run()
+    assert at.session_state["kbd_buffer"] == "ston"
+    at.button(key="kbd_e").click()
+    at.run()
+    at.button(key="kbd_enter").click()
+    at.run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.guesses_made == 1
+    assert game.history[0].guess == "stone"
+    assert at.session_state["kbd_buffer"] == ""
+    # eliminated letters become disabled keys
+    know_gray = [l for l, c in zip("stone", game.history[0].feedback)
+                 if c == "-"]
+    if know_gray:
+        assert at.button(key=f"kbd_{know_gray[0]}").disabled
+
+
+def test_clickable_keyboard_rejects_and_keeps_buffer():
+    at = make_app()
+    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
+    for letter in "zzzzz":
+        at.button(key="kbd_z").click()
+        at.run()
+    at.button(key="kbd_enter").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["message"][0] == "error"
+    assert at.session_state["kbd_buffer"] == "zzzzz"  # kept for editing
+
+
+def test_stats_key_collision_merges_not_clobbers():
+    import app as app_module
+    payload = app_module.parse_stats_json(
+        '{"stats": {'
+        '"classic:de": {"played": 100, "survived": 60, "streak": 1, '
+        '"best_streak": 9, "best_score": 700}, '
+        '"classic:de:5": {"played": 3, "survived": 2, "streak": 2, '
+        '"best_streak": 2, "best_score": 300}, '
+        '"classic:de:5:junk": {"played": 999}}, "survival_best": 1}')
+    merged = payload["stats"]["classic:de:5"]
+    assert merged["played"] == 100      # field-wise max, nothing lost
+    assert merged["best_streak"] == 9
+    assert merged["streak"] == 2
+    assert len(payload["stats"]) == 1   # 4-part junk key rejected
+
+
+def test_buffer_cleared_when_game_ends():
+    at = make_app()
+    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    at.button(key="kbd_s").click()
+    at.run()
+    game = at.session_state["game"]
+    game._pools.append(["crane"])            # trapped...
+    game.undos_used = game.config.max_undos  # ...with no undos
+    at.run()
+    button(at, "⚰️ Accept fate").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["game"].is_over
+    assert at.session_state["kbd_buffer"] == ""  # no ghost letters on board
+
+
+def test_new_game_clears_typed_word():
+    at = make_app()
+    at.text_input(key="guess_input").input("apple")
+    button(at, "🔄 New game").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["guess_input"] == ""
+
+
+def test_legacy_stats_keys_upgrade():
+    import app as app_module  # noqa: import inside test for runtime guard
+    payload = app_module.parse_stats_json(
+        '{"stats": {"classic:de": {"played": 2, "survived": 1, "streak": 1, '
+        '"best_streak": 1, "best_score": 200}}, "survival_best": 5}')
+    assert payload["stats"]["classic:de:5"]["played"] == 2
+
+
+def test_language_switch_starts_fresh_game_in_that_dictionary():
+    from dontwordle import words as W  # noqa
     at = make_app()
     at.selectbox(key="lang_select").set_value("de").run()
     assert not at.exception
@@ -244,8 +361,8 @@ def test_daily_practice_replay_does_not_farm_stats():
     game.secret = "crane"
     for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
         guess(at, word)
-    assert at.session_state["stats"]["daily:en"]["played"] == 1
-    assert at.session_state["stats"]["daily:en"]["streak"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["played"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["streak"] == 1
     button(at, "🔁 Replay today's word").click()
     at.run()
     game = at.session_state["game"]
@@ -253,14 +370,13 @@ def test_daily_practice_replay_does_not_farm_stats():
     for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
         guess(at, word)
     # second (practice) completion must not inflate any stat
-    assert at.session_state["stats"]["daily:en"]["played"] == 1
-    assert at.session_state["stats"]["daily:en"]["survived"] == 1
-    assert at.session_state["stats"]["daily:en"]["streak"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["played"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["survived"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["streak"] == 1
 
 
 def test_fatal_and_forced_grades():
     import random as _random
-    from dontwordle import words as W
     from dontwordle.analysis import analyzer_for, rate_move
     az = analyzer_for("en")
     # playing the secret is graded fatal, never 'brilliant'
@@ -295,7 +411,7 @@ def test_losing_by_guessing_secret_then_undo_rescue():
     game = at.session_state["game"]
     assert game.status is GameStatus.WORDLED
     # loss with undos left must NOT be recorded yet
-    assert at.session_state["stats"]["daily:en"]["played"] == 0
+    assert at.session_state["stats"]["daily:en:5"]["played"] == 0
     button(at, "↩️ Undo that fatal guess").click()
     at.run()
     assert not at.exception
@@ -318,7 +434,7 @@ def test_full_survival_win_flow():
         guess(at, word)  # known-good surviving line against CRANE
     game = at.session_state["game"]
     assert game.status is GameStatus.SURVIVED
-    assert at.session_state["stats"]["survival:en"]["survived"] == 1
+    assert at.session_state["stats"]["survival:en:5"]["survived"] == 1
     assert at.session_state["survival_total"] == game.score()
     # advance to round 2: one fewer undo
     button(at, "⚔️ Next round").click()
@@ -335,8 +451,8 @@ def test_mode_switch_resets_game_and_attributes_stats_to_old_mode():
     at.radio(key="mode_label").set_value("💀 Impossible").run()
     assert not at.exception
     # the abandoned daily loss must be recorded under 'daily'
-    assert at.session_state["stats"]["daily:en"]["played"] == 1
-    assert at.session_state["stats"]["daily:en"]["survived"] == 0
+    assert at.session_state["stats"]["daily:en:5"]["played"] == 1
+    assert at.session_state["stats"]["daily:en:5"]["survived"] == 0
     game = at.session_state["game"]
     assert game.config.label == "Impossible"
     assert game.config.max_undos == 0

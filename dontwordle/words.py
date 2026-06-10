@@ -11,7 +11,8 @@ from pathlib import Path
 
 _DATA_DIR = Path(__file__).parent / "data"
 
-WORD_LENGTH = 5
+WORD_LENGTH = 5            # default/classic length
+WORD_LENGTHS = (4, 5, 6)   # supported board sizes
 
 #: dictionary languages (the interface itself stays English)
 LANGUAGES = {
@@ -30,29 +31,32 @@ KEYBOARDS = {
 }
 
 
-def _load(lang: str, name: str) -> tuple[str, ...]:
+def _load(lang: str, name: str, length: int) -> tuple[str, ...]:
     if lang not in LANGUAGES:
         raise ValueError(f"unsupported language {lang!r}")
+    if length not in WORD_LENGTHS:
+        raise ValueError(f"unsupported word length {length!r}")
     text = (_DATA_DIR / lang / name).read_text(encoding="utf-8")
     words = tuple(
         w for w in (line.strip().lower() for line in text.splitlines())
-        if len(w) == WORD_LENGTH and w.isalpha()
+        if len(w) == length and w.isalpha()
     )
     if not words:
         raise RuntimeError(f"word list {lang}/{name} is empty")
     return words
 
 
-@lru_cache(maxsize=8)
-def allowed_guesses(lang: str = "en") -> frozenset[str]:
+@lru_cache(maxsize=16)
+def allowed_guesses(lang: str = "en", length: int = WORD_LENGTH) -> frozenset[str]:
     """Every word the player may type (and every possible secret)."""
-    return frozenset(_load(lang, "allowed_guesses.txt")) | frozenset(answers(lang))
+    return (frozenset(_load(lang, f"allowed_{length}.txt", length))
+            | frozenset(answers(lang, length)))
 
 
-@lru_cache(maxsize=8)
-def answers(lang: str = "en") -> tuple[str, ...]:
+@lru_cache(maxsize=16)
+def answers(lang: str = "en", length: int = WORD_LENGTH) -> tuple[str, ...]:
     """Curated common words used as hidden secrets (sorted, stable)."""
-    return _load(lang, "answers.txt")
+    return _load(lang, f"answers_{length}.txt", length)
 
 
 def normalize_guess(word: str, lang: str) -> str:
@@ -69,15 +73,17 @@ def normalize_guess(word: str, lang: str) -> str:
     return word
 
 
-def daily_secret(lang: str = "en", date: _dt.date | None = None) -> str:
+def daily_secret(lang: str = "en", length: int = WORD_LENGTH,
+                 date: _dt.date | None = None) -> str:
     """Deterministic secret of the day — same word for every player."""
     date = date or _dt.date.today()
-    pool = answers(lang)
+    pool = answers(lang, length)
     # crc32 is stable across platforms and Python versions (hash() is not).
-    idx = zlib.crc32(f"dontwordle:{lang}:{date.isoformat()}".encode()) % len(pool)
-    return pool[idx]
+    seed = f"dontwordle:{lang}:{length}:{date.isoformat()}"
+    return pool[zlib.crc32(seed.encode()) % len(pool)]
 
 
-def random_secret(lang: str = "en", rng: random.Random | None = None) -> str:
+def random_secret(lang: str = "en", length: int = WORD_LENGTH,
+                  rng: random.Random | None = None) -> str:
     rng = rng or random.Random()
-    return rng.choice(answers(lang))
+    return rng.choice(answers(lang, length))
