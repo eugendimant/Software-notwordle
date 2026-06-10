@@ -700,6 +700,35 @@ def show_message() -> None:
      "loss": st.error, "ok": st.info}[kind](text)
 
 
+TRAP_FORECAST_LIMIT = 30
+
+
+def trap_forecast(game: DontWordleGame) -> tuple[int, int] | None:
+    """In the endgame, count how many playable words lead straight into a
+    trap (their feedback would leave only the secret playable). Cheap to
+    compute exactly once the pool is small. Returns (traps, safe_options)
+    or None when not applicable."""
+    ss = st.session_state
+    safe = game.safe_words()
+    if (game.is_over or not safe
+            or game.guesses_left < 2  # last row: any safe word wins anyway
+            or game.remaining_count > TRAP_FORECAST_LIMIT):
+        return None
+    az = A.analyzer_for(ss.lang, game.word_length)
+    retained = az.retained_counts(safe, game.remaining_words, game.secret)
+    traps = int((retained == 1).sum())
+    return traps, len(safe)
+
+
+def next_daily_in() -> str:
+    """Human countdown to the next daily word (local midnight)."""
+    now = datetime.datetime.now()
+    tomorrow = datetime.datetime.combine(
+        now.date() + datetime.timedelta(days=1), datetime.time.min)
+    secs = int((tomorrow - now).total_seconds())
+    return f"{secs // 3600}h {secs % 3600 // 60:02d}m"
+
+
 def _secret_reveal(game: DontWordleGame) -> str:
     """Post-game reveal: the word plus how common it is — fuel for the
     'was that word likely?' debrief."""
@@ -872,10 +901,36 @@ def main() -> None:
             f"Move {len(ss.ratings)} safety: **{r.grade}** — kept "
             f"**{r.retained:,}** of {r.pool_size:,} words, outperformed "
             f"{'~' if not r.exact else ''}{r.percentile:.0f}% of your options")
+    # endgame intel: shown in modes that allow help (hard keeps its peek;
+    # impossible players are on their own)
+    if (not game.is_over
+            and game.config.max_hints + game.config.max_peeks > 0):
+        forecast = trap_forecast(game)
+        if forecast:
+            traps, options = forecast
+            if traps == options:
+                st.warning(f"🧨 Endgame intel: **every one** of your "
+                           f"{options} playable words leads straight into "
+                           "a trap. Undo while you can!")
+            elif traps:
+                st.warning(f"🧨 Endgame intel: **{traps} of your {options}** "
+                           "playable words lead straight into a trap.")
+            else:
+                st.info(f"🛡️ Endgame intel: none of your {options} playable "
+                        "words trap you on the next row.")
     if ss.hint_word and not game.is_over:
         st.info(f"🛟 Safe word: **{ss.hint_word.upper()}**")
     if ss.peek_words and not game.is_over:
         st.warning("👁️ " + " · ".join(w.upper() for w in ss.peek_words))
+
+    # ----- zen practice: open book ------------------------------------
+    if (ss.mode == "zen" and not game.is_over
+            and game.remaining_count <= 500):
+        with st.expander(f"🗒️ Browse all {game.remaining_count} remaining "
+                         "words (Zen only)"):
+            st.caption("One of these is the hidden word. Study how each "
+                       "guess narrows the field.")
+            st.markdown(" · ".join(w.upper() for w in game.remaining_words))
 
     # ----- controls ----------------------------------------------------
     if not game.is_over:
@@ -973,8 +1028,9 @@ def main() -> None:
                       type="primary")
             st.button("🏳️ End run", on_click=act_new_game)
         elif ss.mode == "daily":
-            st.caption("That's today's puzzle — come back tomorrow! "
-                       "Or switch modes to keep playing.")
+            st.caption(f"That's today's puzzle — the next daily word "
+                       f"drops in **{next_daily_in()}**. Or switch modes "
+                       "to keep playing.")
             st.button("🔁 Replay today's word (practice)",
                       on_click=act_new_game)
         else:
