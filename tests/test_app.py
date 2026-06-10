@@ -95,7 +95,7 @@ def test_peek_shows_words():
 
 def test_random_starting_word_first_turn_only():
     at = make_app()
-    button(at, "🎲 Random starting word").click()
+    button(at, "🎲 Random start").click()
     at.run()
     assert not at.exception
     filled = at.session_state["guess_input"]
@@ -106,7 +106,7 @@ def test_random_starting_word_first_turn_only():
     game = at.session_state["game"]
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
-    assert not [b for b in at.button if "Random starting" in b.label]
+    assert not [b for b in at.button if "Random start" in b.label]
 
 
 def test_invalid_guess_preserves_typed_word():
@@ -402,6 +402,19 @@ def test_live_and_review_ratings_agree():
     for lv, rv in zip(live, review):
         assert (lv.retained, lv.percentile, lv.grade) == \
                (rv.retained, rv.percentile, rv.grade)
+
+
+def test_win_reveals_secret_and_frequency():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    blob = " ".join(str(el.value) for el in at.info) + \
+           " ".join(str(md.value) for md in at.markdown)
+    assert "CRANE" in blob
+    assert "frequency rank" in blob
 
 
 def test_losing_by_guessing_secret_then_undo_rescue():

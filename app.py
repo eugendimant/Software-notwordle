@@ -512,6 +512,63 @@ CSS = """
 @media (max-width: 380px) {
   .dw-tile {width:38px; height:38px; font-size:1.2rem;}
 }
+/* Clickable keyboard: Streamlit stacks columns vertically on phones,
+   which exploded the keyboard into 26 full-width rows. Force each
+   keyboard row to stay a single horizontal flex line with compact,
+   evenly stretched keys at every viewport width. */
+.st-key-clickkbd [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+  gap: 0.22rem !important;
+  margin-bottom: 0.22rem;
+}
+.st-key-clickkbd [data-testid="stColumn"] {
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+  width: auto !important;
+}
+.st-key-clickkbd .stButton > button {
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 2.9rem;
+  padding: 0 !important;
+  font-weight: 700;
+  font-size: 1rem;
+  border-radius: 6px;
+  text-transform: uppercase;
+}
+@media (max-width: 480px) {
+  .st-key-clickkbd .stButton > button {
+    height: 2.6rem;
+    font-size: 0.9rem;
+  }
+}
+/* ability buttons: one compact row on phones instead of a tall stack */
+.st-key-abilities [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+  gap: 0.25rem !important;
+}
+.st-key-abilities [data-testid="stColumn"] {
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+.st-key-abilities .stButton > button {
+  width: 100% !important;
+  min-width: 0 !important;
+  padding: 0.25rem 0.1rem !important;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+/* keep the guess box and its button side by side on phones too */
+.st-key-guessrow [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important;
+}
+.st-key-guessrow [data-testid="stColumn"] {
+  min-width: 0 !important;
+  flex: 1 1 0% !important;
+}
+.st-key-guessrow [data-testid="stColumn"]:last-child {
+  flex: 0 0 5.5rem !important;
+}
 </style>
 """
 
@@ -604,28 +661,31 @@ def render_meter(game: DontWordleGame) -> str:
 
 def render_click_keyboard(game: DontWordleGame, lang: str) -> None:
     """Clickable on-screen keyboard (st.buttons). Letters keep their clue
-    color knowledge: eliminated letters are disabled, known letters green."""
+    color knowledge: eliminated letters are disabled, known letters green.
+    Wrapped in a keyed container so CSS can pin rows horizontal on phones."""
     know = letter_knowledge(game)
-    for r, row in enumerate(W.KEYBOARDS[lang]):
-        extras = 2 if r == len(W.KEYBOARDS[lang]) - 1 else 0
-        cols = st.columns(len(row) + extras, gap="small")
-        offset = 0
-        if extras:
-            cols[0].button("⏎", key="kbd_enter", on_click=act_kbd_enter,
-                           width="stretch", disabled=game.is_over,
-                           help="Submit the word")
-            offset = 1
-        for i, letter in enumerate(row):
-            status = know.get(letter)
-            cols[i + offset].button(
-                letter.upper(), key=f"kbd_{letter}",
-                on_click=act_key, args=(letter,),
-                type="primary" if status in (GREEN, YELLOW) else "secondary",
-                disabled=game.is_over or status == GRAY,
-                width="stretch")
-        if extras:
-            cols[-1].button("⌫", key="kbd_back", on_click=act_backspace,
-                            width="stretch", disabled=game.is_over)
+    with st.container(key="clickkbd"):
+        for r, row in enumerate(W.KEYBOARDS[lang]):
+            extras = 2 if r == len(W.KEYBOARDS[lang]) - 1 else 0
+            cols = st.columns(len(row) + extras, gap="small")
+            offset = 0
+            if extras:
+                cols[0].button("⏎", key="kbd_enter", on_click=act_kbd_enter,
+                               width="stretch", disabled=game.is_over,
+                               help="Submit the word")
+                offset = 1
+            for i, letter in enumerate(row):
+                status = know.get(letter)
+                cols[i + offset].button(
+                    letter.upper(), key=f"kbd_{letter}",
+                    on_click=act_key, args=(letter,),
+                    type="primary" if status in (GREEN, YELLOW)
+                    else "secondary",
+                    disabled=game.is_over or status == GRAY,
+                    width="stretch")
+            if extras:
+                cols[-1].button("⌫", key="kbd_back", on_click=act_backspace,
+                                width="stretch", disabled=game.is_over)
 
 
 def show_message() -> None:
@@ -638,6 +698,27 @@ def show_message() -> None:
         return
     {"error": st.error, "warn": st.warning, "win": st.success,
      "loss": st.error, "ok": st.info}[kind](text)
+
+
+def _secret_reveal(game: DontWordleGame) -> str:
+    """Post-game reveal: the word plus how common it is — fuel for the
+    'was that word likely?' debrief."""
+    rank = W.frequency_rank(game.secret, st.session_state.lang,
+                            game.word_length)
+    total = len(W.answers(st.session_state.lang, game.word_length))
+    if rank is None:
+        return f"The hidden word was **{game.secret.upper()}**."
+    pct = rank / total
+    if pct <= 0.10:
+        common = "a very common word"
+    elif pct <= 0.35:
+        common = "a fairly common word"
+    elif pct <= 0.70:
+        common = "a mid-frequency word"
+    else:
+        common = "a rare word"
+    return (f"The hidden word was **{game.secret.upper()}** — {common} "
+            f"(frequency rank #{rank:,} of {total:,}).")
 
 
 def share_title() -> str:
@@ -719,8 +800,12 @@ def main() -> None:
                 "win.**\n"
                 "- **↩️ Undo** takes back a guess — even a fatal one.\n"
                 "- **🛟 Hint** reveals a guaranteed-safe word.\n"
-                "- **👁️ Peek** shows 5 remaining words… one might be the "
-                "answer.\n"
+                "- **👁️ Peek** shows some remaining words… one might be "
+                "the answer.\n"
+                "- Secrets are **weighted by real-world frequency**: "
+                "everyday words are several times likelier than obscure "
+                "ones. If the clues fit two words, suspect the common "
+                "one!\n"
                 "- Surviving with more 🟩/🟨 on the board scores higher."
             )
 
@@ -795,15 +880,17 @@ def main() -> None:
     # ----- controls ----------------------------------------------------
     if not game.is_over:
         if ss.input_mode == "type":
-            with st.form("guess_form", clear_on_submit=False, border=False):
-                c1, c2 = st.columns([4, 1])
-                c1.text_input("Your guess", key="guess_input",
-                              max_chars=game.word_length,
-                              placeholder=f"type a {game.word_length}-letter "
-                                          "word…",
-                              label_visibility="collapsed")
-                c2.form_submit_button("Guess", on_click=act_submit,
-                                      type="primary", width="stretch")
+            with st.container(key="guessrow"):
+                with st.form("guess_form", clear_on_submit=False,
+                             border=False):
+                    c1, c2 = st.columns([4, 1])
+                    c1.text_input("Your guess", key="guess_input",
+                                  max_chars=game.word_length,
+                                  placeholder=f"type a {game.word_length}"
+                                              "-letter word…",
+                                  label_visibility="collapsed")
+                    c2.form_submit_button("Guess", on_click=act_submit,
+                                          type="primary", width="stretch")
         # only show abilities the current mode actually has
         actions = []
         if game.config.max_undos > 0:
@@ -816,12 +903,13 @@ def main() -> None:
             actions.append((f"👁️ Peek ({fmt(game.peeks_left)})", act_peek,
                             game.peeks_left <= 0))
         if game.guesses_made == 0:
-            actions.append(("🎲 Random starting word", act_random_start,
-                            False))
+            actions.append(("🎲 Random start", act_random_start, False))
         if actions:
-            for col, (label, cb, off) in zip(st.columns(len(actions)),
-                                             actions):
-                col.button(label, on_click=cb, disabled=off, width="stretch")
+            with st.container(key="abilities"):
+                for col, (label, cb, off) in zip(st.columns(len(actions)),
+                                                 actions):
+                    col.button(label, on_click=cb, disabled=off,
+                               width="stretch")
         if game.is_trapped and not game.can_undo():
             st.button(f"⚰️ Accept fate — play “{game.secret.upper()}”",
                       on_click=act_accept_fate, type="primary",
@@ -834,6 +922,8 @@ def main() -> None:
                 ss.celebrated = True
             bd = game.score_breakdown()
             st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+            st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
+                    f"{game.guesses_made} guesses.")
             floor_note = " — floored at the 10-point minimum" \
                 if bd["floored"] else ""
             st.caption(f"{bd['base']} survival + {bd['tiles']} tile points "
@@ -841,8 +931,7 @@ def main() -> None:
                        f"× {bd['multiplier']:g} {game.config.label} bonus"
                        f"{floor_note}")
         else:
-            st.error(f"💀 **You Wordled.** The hidden word was "
-                     f"**{game.secret.upper()}**.")
+            st.error(f"💀 **You Wordled.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
                 st.warning(f"⚔️ Run over at round {ss.survival_round}. "
                            f"Final run score: **{ss.survival_total}** · "

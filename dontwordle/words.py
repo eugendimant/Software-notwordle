@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import random
 import unicodedata
 import zlib
@@ -55,8 +56,32 @@ def allowed_guesses(lang: str = "en", length: int = WORD_LENGTH) -> frozenset[st
 
 @lru_cache(maxsize=16)
 def answers(lang: str = "en", length: int = WORD_LENGTH) -> tuple[str, ...]:
-    """Curated common words used as hidden secrets (sorted, stable)."""
+    """Curated common words used as hidden secrets, ordered most-frequent
+    first (file order = corpus frequency rank)."""
     return _load(lang, f"answers_{length}.txt", length)
+
+
+@lru_cache(maxsize=16)
+def _cumulative_weights(lang: str, length: int) -> tuple[float, ...]:
+    """Zipf-flavoured weights (1/√rank): everyday words are several times
+    likelier secrets than obscure ones, so frequency intuition pays off,
+    while the tail still appears often enough to stay surprising."""
+    total = 0.0
+    cum = []
+    for rank in range(1, len(answers(lang, length)) + 1):
+        total += 1.0 / math.sqrt(rank)
+        cum.append(total)
+    return tuple(cum)
+
+
+def frequency_rank(word: str, lang: str = "en",
+                   length: int = WORD_LENGTH) -> int | None:
+    """1-based how-common rank of a secret (1 = most common), or None."""
+    pool = answers(lang, length)
+    try:
+        return pool.index(word) + 1
+    except ValueError:
+        return None
 
 
 def normalize_guess(word: str, lang: str) -> str:
@@ -75,15 +100,22 @@ def normalize_guess(word: str, lang: str) -> str:
 
 def daily_secret(lang: str = "en", length: int = WORD_LENGTH,
                  date: _dt.date | None = None) -> str:
-    """Deterministic secret of the day — same word for every player."""
+    """Deterministic, frequency-weighted secret of the day — the same
+    word for every player."""
     date = date or _dt.date.today()
     pool = answers(lang, length)
+    cum = _cumulative_weights(lang, length)
     # crc32 is stable across platforms and Python versions (hash() is not).
     seed = f"dontwordle:{lang}:{length}:{date.isoformat()}"
-    return pool[zlib.crc32(seed.encode()) % len(pool)]
+    u = (zlib.crc32(seed.encode()) / 0xFFFFFFFF) * cum[-1]
+    import bisect
+    return pool[min(bisect.bisect_left(cum, u), len(pool) - 1)]
 
 
 def random_secret(lang: str = "en", length: int = WORD_LENGTH,
                   rng: random.Random | None = None) -> str:
+    """Frequency-weighted random secret (common words come up more)."""
     rng = rng or random.Random()
-    return rng.choice(answers(lang, length))
+    pool = answers(lang, length)
+    cum = _cumulative_weights(lang, length)
+    return rng.choices(pool, cum_weights=cum, k=1)[0]

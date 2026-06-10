@@ -7,6 +7,6 @@ you toward the answer. Survive to win.
 
 # four components: major.minor.feature.iteration — the last digit absorbs
 # rapid improvement loops so headline versions move slowly
-__version__ = "1.5.0.0"
+__version__ = "1.6.0.0"
 __author__ = "Eugen Dimant"
 __homepage__ = "https://eugendimant.github.io"
