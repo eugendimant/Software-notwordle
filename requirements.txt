@@ -1,0 +1,2 @@
+streamlit>=1.49
+numpy>=1.23

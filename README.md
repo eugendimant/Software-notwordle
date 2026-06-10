@@ -1,0 +1,140 @@
+# 🙅 DON'T Wordle
+
+**The anti-Wordle.** Six guesses — and your only job is to *never* say the
+hidden word. A fast, modern [Streamlit](https://streamlit.io) adaptation of
+the cult classic [dontwordle.com](https://dontwordle.com), rebuilt from
+scratch with extra game modes, abilities, move-quality analysis, four
+dictionary languages, scoring and stats.
+
+> Built by [Eugen Dimant](https://eugendimant.github.io) · current version
+> in [`dontwordle/__init__.py`](dontwordle/__init__.py)
+
+## Why it's hard (and fun)
+
+Every guess must be a real word **and** obey every clue revealed so far:
+
+| Clue | Rule it imposes on all future guesses |
+|------|----------------------------------------|
+| 🟩 green | that letter is locked into that exact spot |
+| 🟨 yellow | that letter must be re-used (somewhere else) |
+| ⬜ gray | that letter is forbidden |
+
+So each guess shrinks the pool of *valid words remaining* — squeezing you
+toward the one word you must not say. Survive all your guesses and you win.
+
+## Game modes
+
+| Mode | Guesses | Undos | Hints | Peeks | Score |
+|------|--------:|------:|------:|------:|------:|
+| 📅 Daily Challenge | 6 | 5 | 1 | 1 | 1× |
+| 🎲 Classic | 6 | 5 | 1 | 1 | 1× |
+| 🔥 Hard | 6 | 2 | 0 | 1 | 1.5× |
+| 💀 Impossible | **7** | 0 | 0 | 0 | 2.5× |
+| ⚔️ Survival | 6/round | 5 → 0 | early rounds | 1 | climbs +25%/round |
+| 🧘 Zen | 6 | ∞ | ∞ | ∞ | 0.25× |
+
+**Daily Challenge** uses a deterministic word-of-the-day, so everyone on
+the planet fights the same word. **Survival** is an endless gauntlet:
+every round costs you an undo and raises the score multiplier — one loss
+ends the run.
+
+## Abilities
+
+- **↩️ Undo** — take back your last guess, *even a fatal one*.
+- **🛟 Hint** — the oracle reveals a guaranteed-safe playable word.
+- **👁️ Peek** — gamble: see 5 of the remaining words… the hidden word may
+  be among them.
+- **🎲 Random starting word** — a random opener, like the original
+  (first guess only — mid-game randomness could land on the secret).
+- **⚰️ Accept fate** — trapped with no undos? One click ends it with
+  dignity.
+
+Surviving with more 🟩/🟨 on the board scores higher; undos, hints and
+peeks cost points. Copy-paste emoji share cards included.
+
+## Languages
+
+Play with 🇬🇧 English (14,855 words), 🇩🇪 German (11,623), 🇷🇺 Russian
+(8,126) or 🇪🇸 Spanish (12,891) dictionaries — the interface stays
+English. Secrets are curated common words (filtered against native
+dictionaries, English loan-words, names and profanity); each language
+has its own keyboard layout, daily word and stats. Input is normalized
+to dictionary conventions (Russian ё→е, Spanish accents fold, ñ stays
+distinct).
+
+## Move analysis
+
+- **Live safety rating** after every guess: a grade (🟢 brilliant → 🔴
+  reckless), how many words your play kept alive, and the percentile of
+  alternatives it beat.
+- **🔬 Best-move review** after the game: row by row, the word that would
+  have kept the most options open. Exact for pools ≤ 2,500 words,
+  sampled above that — vectorized with numpy, so even the 14,855-word
+  opening row is analyzed in well under a second.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+Deploy free on [Streamlit Community Cloud](https://streamlit.io/cloud):
+point it at this repo, main file `app.py`. Done.
+
+## Architecture & testing
+
+```
+dontwordle/
+  engine.py     pure game logic (zero UI deps)
+  words.py      word lists, daily/random secrets
+  simulate.py   self-play balance harness (python -m dontwordle.simulate)
+  analysis.py   numpy-vectorized move-quality analyzer
+  data/<lang>/  per-language secrets + playable words (en/de/ru/es)
+app.py          Streamlit UI
+tests/          ~80 tests: engine, analysis, self-play, AppTest UI
+```
+
+The engine was tuned with thousands of simulated self-play games per
+language (`python -m dontwordle.simulate 300`): Classic lands near a
+44–61% bot survival rate across languages, Impossible near 3–12% —
+brutal but beatable.
+
+```bash
+python -m pytest
+```
+
+## Changelog
+
+- **1.4.0.1** — dual independent review pass: de/es/ru secret lists
+  rebuilt (native-dictionary ∩ frequency, minus English words, names and
+  profanity; Russian pool rebuilt from curated nouns — no more word
+  fragments); stale post-game analysis cleared on undo; daily practice
+  replays no longer farm stats; daily hints/peeks deterministic per
+  player order; fair mid-rank percentiles with 💀 fatal / ⚰️ forced
+  grades; live and review ratings now always agree; one-shot animations;
+  standard ЙЦУКЕН layout.
+- **1.4.0.0** — four dictionary languages (🇬🇧🇩🇪🇷🇺🇪🇸) with per-language
+  keyboards, dailies and stats; live move-safety ratings; post-game
+  best-move review (numpy-vectorized); balance re-tuned per language with
+  expanded dictionaries; UX overhaul: tile-flip reveals, error shake,
+  pulsing trapped alert, log-scale danger gauge, refined header and
+  keyboard. Version scheme extended to four digits.
+- **1.3.0** — random word restricted to the opening guess (mid-game it
+  could pre-fill the fatal word), typos no longer wipe your input,
+  ⚰️ accept-fate button when trapped, itemized score breakdown,
+  stats backup/restore (download + upload JSON), abilities hidden in
+  modes that lack them, ∞ badges for Zen, win celebration fires once,
+  rules auto-expanded for first-time players.
+- **1.2.0** — six game modes, abilities (hint/peek/random word), survival
+  gauntlet, per-mode stats & streaks, danger meter, emoji share cards,
+  mode-scaled scoring, full test suite with self-play simulation.
+
+## Credits
+
+- Original concept: [dontwordle.com](https://dontwordle.com)
+- Author: [Eugen Dimant](https://eugendimant.github.io)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
