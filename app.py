@@ -7,6 +7,7 @@ Run with:  streamlit run app.py
 from __future__ import annotations
 
 import datetime
+import json
 import random
 
 import streamlit as st
@@ -17,6 +18,7 @@ from dontwordle.engine import (
     GRAY,
     GREEN,
     PRESETS,
+    UNLIMITED,
     YELLOW,
     DontWordleGame,
     GameConfig,
@@ -90,6 +92,7 @@ def init_state() -> None:
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
     ss.setdefault("recorded", False)
+    ss.setdefault("celebrated", False)
     ss.setdefault("daily_done", None)  # iso date of last finished daily
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
@@ -147,6 +150,7 @@ def act_new_game(next_round: bool = False) -> None:
     ss.hint_word = None
     ss.peek_words = None
     ss.recorded = False
+    ss.celebrated = False
 
 
 def act_change_mode() -> None:
@@ -159,17 +163,28 @@ def act_change_mode() -> None:
 
 
 def act_submit() -> None:
+    word = st.session_state.get("guess_input", "").strip().lower()
+    _process_guess(word, clear_input=True)
+
+
+def act_accept_fate() -> None:
+    """Trapped with no way out — play the only word left and take the L."""
+    _process_guess(st.session_state.game.secret)
+
+
+def _process_guess(word: str, clear_input: bool = False) -> None:
     ss = st.session_state
-    word = ss.get("guess_input", "").strip().lower()
-    ss.guess_input = ""
     game: DontWordleGame = ss.game
     if game.is_over:
         return
     try:
         turn = game.submit(word)
     except InvalidGuess as e:
+        # keep the typed word so the player can fix it instead of retyping
         ss.message = ("error", e.reason)
         return
+    if clear_input:
+        ss.guess_input = ""
     ss.hint_word = None
     ss.peek_words = None
     if game.status is GameStatus.WORDLED:
@@ -192,11 +207,13 @@ def act_submit() -> None:
     record_result_if_final()
 
 
-def act_random_word() -> None:
-    """Fill the box with a random *currently playable* word."""
+def act_random_start() -> None:
+    """Fill the box with a random opening word (first guess only, like the
+    original's 'Random Starting Word'). Mid-game randomness could land on
+    the secret itself, so it is deliberately unavailable after turn one."""
     ss = st.session_state
     game: DontWordleGame = ss.game
-    if not game.is_over and game.remaining_words:
+    if not game.is_over and game.guesses_made == 0:
         ss.guess_input = game.rng.choice(game.remaining_words)
 
 
@@ -229,6 +246,39 @@ def act_peek() -> None:
                               "the hidden word might be among them!")
     else:
         ss.message = ("error", "No peek available.")
+
+
+# ----------------------------------------------------------------------
+# Stats backup / restore
+# ----------------------------------------------------------------------
+STAT_KEYS = ("played", "survived", "streak", "best_streak", "best_score")
+
+
+def export_stats_json() -> str:
+    ss = st.session_state
+    return json.dumps({"app": "dontwordle", "version": __version__,
+                       "stats": ss.stats, "survival_best": ss.survival_best},
+                      indent=2)
+
+
+def parse_stats_json(text: str) -> dict | None:
+    """Validate an exported stats file. Returns clean payload or None."""
+    try:
+        data = json.loads(text)
+        clean = {
+            mode: {k: max(0, int(s.get(k, 0))) for k in STAT_KEYS}
+            for mode, s in data["stats"].items()
+            if mode in MODES.values() and isinstance(s, dict)
+        }
+        return {"stats": clean,
+                "survival_best": max(0, int(data.get("survival_best", 0)))}
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
+def fmt(n: int) -> str:
+    """Counter label; huge budgets render as infinity."""
+    return "∞" if n >= UNLIMITED // 2 else str(n)
 
 
 # ----------------------------------------------------------------------
@@ -325,7 +375,7 @@ def render_meter(game: DontWordleGame) -> str:
             f'<div class="lab" style="color:{color}">{label}</div></div>'
             f'<div><div class="lab">Undos remaining</div>'
             f'<div class="num" style="font-size:1.9rem">'
-            f'{min(game.undos_left, 99)}</div>'
+            f'{fmt(game.undos_left)}</div>'
             f'<div class="lab">guesses left: {game.guesses_left}</div></div>'
             f'</div>')
 
@@ -387,7 +437,8 @@ def main() -> None:
         if ss.mode == "survival":
             st.metric("Best survival run", ss.survival_best)
 
-        with st.expander("📖 How to play"):
+        never_played = not any(s["played"] for s in ss.stats.values())
+        with st.expander("📖 How to play", expanded=never_played):
             st.markdown(
                 "- Guess five-letter words — but **never** the hidden word.\n"
                 "- Every guess must obey all clues so far: 🟩 greens stay "
@@ -402,6 +453,27 @@ def main() -> None:
                 "answer.\n"
                 "- Surviving with more 🟩/🟨 on the board scores higher."
             )
+
+        with st.expander("💾 Backup stats"):
+            st.caption("Stats live in this browser session. Download them "
+                       "to keep, re-upload to restore.")
+            st.download_button("⬇️ Download stats", export_stats_json(),
+                               file_name="dontwordle_stats.json",
+                               mime="application/json", width="stretch")
+            up = st.file_uploader("Restore from file", type="json",
+                                  key="stats_upload")
+            if up is not None:
+                content = up.getvalue().decode("utf-8", errors="replace")
+                token = hash(content)
+                if ss.get("stats_upload_token") != token:
+                    ss.stats_upload_token = token  # import each file once
+                    payload = parse_stats_json(content)
+                    if payload:
+                        ss.stats = payload["stats"]
+                        ss.survival_best = payload["survival_best"]
+                        st.success("Stats restored!")
+                    else:
+                        st.error("That doesn't look like a stats file.")
 
         st.divider()
         st.markdown(
@@ -441,23 +513,39 @@ def main() -> None:
                           label_visibility="collapsed")
             c2.form_submit_button("Guess", on_click=act_submit,
                                   type="primary", width="stretch")
-        b1, b2, b3, b4 = st.columns(4)
-        b1.button(f"↩️ Undo ({min(game.undos_left, 99)})",
-                  on_click=act_undo, disabled=not game.can_undo(),
-                  width="stretch")
-        b2.button(f"🛟 Hint ({min(game.hints_left, 9)})", on_click=act_hint,
-                  disabled=game.hints_left <= 0, width="stretch")
-        b3.button(f"👁️ Peek ({min(game.peeks_left, 9)})", on_click=act_peek,
-                  disabled=game.peeks_left <= 0, width="stretch")
-        b4.button("🎲 Random word", on_click=act_random_word,
-                  width="stretch",
-                  help="Fills the box with a random playable word.")
+        # only show abilities the current mode actually has
+        actions = []
+        if game.config.max_undos > 0:
+            actions.append((f"↩️ Undo ({fmt(game.undos_left)})", act_undo,
+                            not game.can_undo()))
+        if game.config.max_hints > 0:
+            actions.append((f"🛟 Hint ({fmt(game.hints_left)})", act_hint,
+                            game.hints_left <= 0))
+        if game.config.max_peeks > 0:
+            actions.append((f"👁️ Peek ({fmt(game.peeks_left)})", act_peek,
+                            game.peeks_left <= 0))
+        if game.guesses_made == 0:
+            actions.append(("🎲 Random starting word", act_random_start,
+                            False))
+        if actions:
+            for col, (label, cb, off) in zip(st.columns(len(actions)),
+                                             actions):
+                col.button(label, on_click=cb, disabled=off, width="stretch")
+        if game.is_trapped and not game.can_undo():
+            st.button(f"⚰️ Accept fate — play “{game.secret.upper()}”",
+                      on_click=act_accept_fate, type="primary",
+                      width="stretch")
     else:
         # ----- end of game panel ---------------------------------------
         if game.status is GameStatus.SURVIVED:
-            st.balloons()
-            st.success(f"🎉 **You survived!** Score: **{game.score()}**  "
-                       f"(undos used: {game.undos_used})")
+            if not ss.celebrated:
+                st.balloons()
+                ss.celebrated = True
+            bd = game.score_breakdown()
+            st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+            st.caption(f"{bd['base']} survival + {bd['tiles']} tile points "
+                       f"− {bd['penalties']} help penalties, "
+                       f"× {bd['multiplier']:g} {game.config.label} bonus")
         else:
             st.error(f"💀 **You Wordled.** The hidden word was "
                      f"**{game.secret.upper()}**.")
@@ -485,4 +573,6 @@ def main() -> None:
             st.button("🔁 Play again", on_click=act_new_game, type="primary")
 
 
-main()
+# run under `streamlit run` / AppTest, but stay importable for unit tests
+if __name__ == "__main__" or st.runtime.exists():
+    main()

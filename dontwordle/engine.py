@@ -256,14 +256,22 @@ class DontWordleGame:
 
     def score(self) -> int:
         """Final score; surviving with more revealed clues scores higher."""
+        return self.score_breakdown()["total"]
+
+    def score_breakdown(self) -> dict[str, float]:
+        """Itemized scoring, for display. All zeros unless the player won."""
         if self.status is not GameStatus.SURVIVED:
-            return 0
+            return {"base": 0, "tiles": 0, "penalties": 0,
+                    "multiplier": self.config.score_multiplier, "total": 0}
         tiles = sum(self.TILE_POINTS[c] for t in self.history for c in t.feedback)
-        penalty = (self.undos_used * self.UNDO_COST
-                   + self.hints_used * self.HINT_COST
-                   + self.peeks_used * self.PEEK_COST)
-        raw = self.SURVIVAL_BONUS + tiles - penalty
-        return max(10, round(raw * self.config.score_multiplier))
+        penalties = (self.undos_used * self.UNDO_COST
+                     + self.hints_used * self.HINT_COST
+                     + self.peeks_used * self.PEEK_COST)
+        raw = self.SURVIVAL_BONUS + tiles - penalties
+        total = max(10, round(raw * self.config.score_multiplier))
+        return {"base": self.SURVIVAL_BONUS, "tiles": tiles,
+                "penalties": penalties,
+                "multiplier": self.config.score_multiplier, "total": total}
 
     EMOJI = {GREEN: "🟩", YELLOW: "🟨", GRAY: "⬜"}
 

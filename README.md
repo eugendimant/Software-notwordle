@@ -43,8 +43,10 @@ ends the run.
 - **🛟 Hint** — the oracle reveals a guaranteed-safe playable word.
 - **👁️ Peek** — gamble: see 5 of the remaining words… the hidden word may
   be among them.
-- **🎲 Random word** — fills the box with a random playable word, like the
-  original's *Random Starting Word*.
+- **🎲 Random starting word** — a random opener, like the original
+  (first guess only — mid-game randomness could land on the secret).
+- **⚰️ Accept fate** — trapped with no undos? One click ends it with
+  dignity.
 
 Surviving with more 🟩/🟨 on the board scores higher; undos, hints and
 peeks cost points. Copy-paste emoji share cards included.
@@ -68,7 +70,7 @@ dontwordle/
   simulate.py   self-play balance harness (python -m dontwordle.simulate)
   data/         2,315 secrets · 14,855 playable words
 app.py          Streamlit UI
-tests/          50 tests: engine units, self-play invariants, AppTest UI
+tests/          56 tests: engine units, self-play invariants, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games
@@ -81,6 +83,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.3.0** — random word restricted to the opening guess (mid-game it
+  could pre-fill the fatal word), typos no longer wipe your input,
+  ⚰️ accept-fate button when trapped, itemized score breakdown,
+  stats backup/restore (download + upload JSON), abilities hidden in
+  modes that lack them, ∞ badges for Zen, win celebration fires once,
+  rules auto-expanded for first-time players.
 - **1.2.0** — six game modes, abilities (hint/peek/random word), survival
   gauntlet, per-mode stats & streaks, danger meter, emoji share cards,
   mode-scaled scoring, full test suite with self-play simulation.

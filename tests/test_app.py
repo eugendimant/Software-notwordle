@@ -94,13 +94,70 @@ def test_peek_shows_words():
     assert 1 <= len(at.session_state["peek_words"]) <= 5
 
 
-def test_random_word_button_fills_playable_word():
+def test_random_starting_word_first_turn_only():
     at = make_app()
-    button(at, "🎲 Random word").click()
+    button(at, "🎲 Random starting word").click()
     at.run()
     assert not at.exception
     filled = at.session_state["guess_input"]
     assert filled in at.session_state["game"].remaining_words
+    # after the first guess the random button must disappear
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    assert not [b for b in at.button if "Random starting" in b.label]
+
+
+def test_invalid_guess_preserves_typed_word():
+    at = make_app()
+    at.text_input(key="guess_input").input("zzzzz")
+    button(at, "Guess").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["message"][0] == "error"
+    assert at.session_state["guess_input"] == "zzzzz"
+
+
+def test_accept_fate_button_when_trapped_without_undos():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game._pools.append(["crane"])          # force a trapped position
+    game.undos_used = game.config.max_undos  # ...with no undos left
+    at.run()
+    assert not at.exception
+    assert at.session_state["game"].is_trapped
+    button(at, "⚰️ Accept fate").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["game"].status is GameStatus.WORDLED
+
+
+def test_modes_hide_unavailable_abilities():
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    assert not at.exception
+    labels = [b.label for b in at.button]
+    assert not any(l.startswith(("↩️ Undo", "🛟 Hint", "👁️ Peek"))
+                   for l in labels)
+    # zen shows infinite budgets
+    at.radio(key="mode_label").set_value("🧘 Zen").run()
+    assert not at.exception
+    assert any(b.label == "↩️ Undo (∞)" for b in at.button)
+
+
+def test_stats_export_import_roundtrip():
+    import app as app_module
+    exported = ('{"app": "dontwordle", "version": "x", '
+                '"stats": {"daily": {"played": 3, "survived": 2, '
+                '"streak": 2, "best_streak": 2, "best_score": 412}, '
+                '"bogus_mode": {"played": 1}}, "survival_best": 777}')
+    payload = app_module.parse_stats_json(exported)
+    assert payload["survival_best"] == 777
+    assert payload["stats"]["daily"]["best_score"] == 412
+    assert "bogus_mode" not in payload["stats"]
+    assert app_module.parse_stats_json("not json") is None
+    assert app_module.parse_stats_json('{"stats": 7}') is None
 
 
 def test_losing_by_guessing_secret_then_undo_rescue():

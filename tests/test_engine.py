@@ -205,6 +205,30 @@ def test_score_components():
     assert g.score() == expected
 
 
+def test_score_breakdown_matches_score():
+    g = DontWordleGame("crane", words.allowed_guesses(),
+                       GameConfig("T", max_guesses=2, max_undos=5,
+                                  score_multiplier=1.5))
+    g.submit("stone")
+    g.undo()
+    g.submit("stone")
+    g.submit("brine")   # consistent with stone's ---GG clues vs CRANE
+    bd = g.score_breakdown()
+    assert g.status is GameStatus.SURVIVED
+    assert bd["total"] == g.score()
+    assert bd["base"] == 100
+    assert bd["penalties"] == g.UNDO_COST
+    assert bd["multiplier"] == 1.5
+    assert bd["total"] == max(10, round(
+        (bd["base"] + bd["tiles"] - bd["penalties"]) * 1.5))
+
+
+def test_score_breakdown_zero_when_not_won(game):
+    assert game.score_breakdown()["total"] == 0
+    game.submit("crane")
+    assert game.score_breakdown()["total"] == 0
+
+
 def test_presets_sane():
     for key, cfg in PRESETS.items():
         assert cfg.max_guesses >= 6
