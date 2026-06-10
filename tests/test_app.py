@@ -404,6 +404,19 @@ def test_live_and_review_ratings_agree():
                (rv.retained, rv.percentile, rv.grade)
 
 
+def test_win_reveals_secret_and_frequency():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    blob = " ".join(str(el.value) for el in at.info) + \
+           " ".join(str(md.value) for md in at.markdown)
+    assert "CRANE" in blob
+    assert "frequency rank" in blob
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

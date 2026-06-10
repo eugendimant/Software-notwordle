@@ -177,6 +177,40 @@ def test_rate_move_works_at_length_six():
     assert r.best_retained >= r.retained > 0
 
 
+def test_frequency_rank_and_order():
+    for lang in W.LANGUAGES:
+        pool = W.answers(lang, 5)
+        assert W.frequency_rank(pool[0], lang, 5) == 1
+        assert W.frequency_rank(pool[-1], lang, 5) == len(pool)
+        assert W.frequency_rank("zzzzz", lang, 5) is None
+
+
+@pytest.mark.parametrize("lang", list(W.LANGUAGES))
+def test_secret_selection_is_frequency_weighted(lang):
+    """Common words must be drawn noticeably more often than rare ones."""
+    rng = random.Random(99)
+    pool = W.answers(lang, 5)
+    q = len(pool) // 4
+    top = set(pool[:q])
+    bottom = set(pool[-q:])
+    draws = [W.random_secret(lang, 5, rng) for _ in range(3000)]
+    top_n = sum(d in top for d in draws)
+    bottom_n = sum(d in bottom for d in draws)
+    assert top_n > 1.5 * bottom_n, (top_n, bottom_n)
+    # the tail must still be reachable
+    assert bottom_n > 0
+
+
+def test_daily_secret_weighted_and_deterministic():
+    import datetime
+    d = datetime.date(2026, 6, 14)
+    for lang in W.LANGUAGES:
+        for length in W.WORD_LENGTHS:
+            s = W.daily_secret(lang, length, d)
+            assert s == W.daily_secret(lang, length, d)
+            assert s in W.answers(lang, length)
+
+
 def test_normalize_guess():
     assert W.normalize_guess("Ёлка!".strip("!"), "ru") == "елка"
     assert W.normalize_guess("común", "es") == "comun"

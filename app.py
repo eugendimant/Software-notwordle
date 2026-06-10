@@ -700,6 +700,27 @@ def show_message() -> None:
      "loss": st.error, "ok": st.info}[kind](text)
 
 
+def _secret_reveal(game: DontWordleGame) -> str:
+    """Post-game reveal: the word plus how common it is — fuel for the
+    'was that word likely?' debrief."""
+    rank = W.frequency_rank(game.secret, st.session_state.lang,
+                            game.word_length)
+    total = len(W.answers(st.session_state.lang, game.word_length))
+    if rank is None:
+        return f"The hidden word was **{game.secret.upper()}**."
+    pct = rank / total
+    if pct <= 0.10:
+        common = "a very common word"
+    elif pct <= 0.35:
+        common = "a fairly common word"
+    elif pct <= 0.70:
+        common = "a mid-frequency word"
+    else:
+        common = "a rare word"
+    return (f"The hidden word was **{game.secret.upper()}** — {common} "
+            f"(frequency rank #{rank:,} of {total:,}).")
+
+
 def share_title() -> str:
     ss = st.session_state
     tag = "" if ss.lang == "en" else f" {W.LANGUAGES[ss.lang]}"
@@ -779,8 +800,12 @@ def main() -> None:
                 "win.**\n"
                 "- **↩️ Undo** takes back a guess — even a fatal one.\n"
                 "- **🛟 Hint** reveals a guaranteed-safe word.\n"
-                "- **👁️ Peek** shows 5 remaining words… one might be the "
-                "answer.\n"
+                "- **👁️ Peek** shows some remaining words… one might be "
+                "the answer.\n"
+                "- Secrets are **weighted by real-world frequency**: "
+                "everyday words are several times likelier than obscure "
+                "ones. If the clues fit two words, suspect the common "
+                "one!\n"
                 "- Surviving with more 🟩/🟨 on the board scores higher."
             )
 
@@ -897,6 +922,8 @@ def main() -> None:
                 ss.celebrated = True
             bd = game.score_breakdown()
             st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+            st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
+                    f"{game.guesses_made} guesses.")
             floor_note = " — floored at the 10-point minimum" \
                 if bd["floored"] else ""
             st.caption(f"{bd['base']} survival + {bd['tiles']} tile points "
@@ -904,8 +931,7 @@ def main() -> None:
                        f"× {bd['multiplier']:g} {game.config.label} bonus"
                        f"{floor_note}")
         else:
-            st.error(f"💀 **You Wordled.** The hidden word was "
-                     f"**{game.secret.upper()}**.")
+            st.error(f"💀 **You Wordled.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
                 st.warning(f"⚔️ Run over at round {ss.survival_round}. "
                            f"Final run score: **{ss.survival_total}** · "
