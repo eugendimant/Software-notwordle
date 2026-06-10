@@ -225,6 +225,69 @@ def test_post_game_review_lists_best_words():
     assert "Best-move" in blob or "kept" in blob
 
 
+def test_undo_clears_stale_review():
+    at = make_app()
+    secret = at.session_state["game"].secret
+    guess(at, secret)  # lose (undoable)
+    button(at, "Analyze my game").click()
+    at.run()
+    assert at.session_state["review"] is not None
+    button(at, "↩️ Undo that fatal guess").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["review"] is None
+
+
+def test_daily_practice_replay_does_not_farm_stats():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["stats"]["daily:en"]["played"] == 1
+    assert at.session_state["stats"]["daily:en"]["streak"] == 1
+    button(at, "🔁 Replay today's word").click()
+    at.run()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    # second (practice) completion must not inflate any stat
+    assert at.session_state["stats"]["daily:en"]["played"] == 1
+    assert at.session_state["stats"]["daily:en"]["survived"] == 1
+    assert at.session_state["stats"]["daily:en"]["streak"] == 1
+
+
+def test_fatal_and_forced_grades():
+    import random as _random
+    from dontwordle import words as W
+    from dontwordle.analysis import analyzer_for, rate_move
+    az = analyzer_for("en")
+    # playing the secret is graded fatal, never 'brilliant'
+    r = rate_move(az, "crane", az.words[:50] + ["crane"], "crane",
+                  rng=_random.Random(0))
+    assert r.fatal and r.grade == "💀 fatal"
+    # a pool of one is a forced move, not a praised one
+    r = rate_move(az, "crane", ["crane"], "crane", rng=_random.Random(0))
+    assert r.forced and r.grade == "⚰️ forced"
+    assert r.percentile == 100.0  # no alternatives existed
+
+
+def test_live_and_review_ratings_agree():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    live = list(at.session_state["ratings"])
+    button(at, "Analyze my game").click()
+    at.run()
+    review = at.session_state["review"]
+    for lv, rv in zip(live, review):
+        assert (lv.retained, lv.percentile, lv.grade) == \
+               (rv.retained, rv.percentile, rv.grade)
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

@@ -26,7 +26,7 @@ KEYBOARDS = {
     "en": ("qwertyuiop", "asdfghjkl", "zxcvbnm"),
     "de": ("qwertzuiopü", "asdfghjklöä", "yxcvbnm"),
     "es": ("qwertyuiop", "asdfghjklñ", "zxcvbnm"),
-    "ru": ("йцукенгшщзх", "фывапролджэ", "ячсмитьбюъ"),
+    "ru": ("йцукенгшщзхъ", "фывапролджэ", "ячсмитьбю"),
 }
 
 

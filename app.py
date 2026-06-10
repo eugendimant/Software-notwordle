@@ -99,7 +99,7 @@ def init_state() -> None:
     ss.setdefault("peek_words", None)
     ss.setdefault("recorded", False)
     ss.setdefault("celebrated", False)
-    ss.setdefault("daily_done", None)  # iso date of last finished daily
+    ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang"} already counted
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
 
@@ -121,6 +121,12 @@ def record_result_if_final(force: bool = False) -> None:
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
         return
     ss.recorded = True
+    if ss.mode == "daily":
+        daily_key = f"{datetime.date.today().isoformat()}:{ss.lang}"
+        if daily_key in ss.daily_done:
+            return  # practice replay of a known word: don't farm stats
+        ss.daily_done.add(daily_key)
+    ss.stats_upload_token = None  # stats changed; allow re-restoring a backup
     stats = mode_stats(ss.mode)
     stats["played"] += 1
     if game.status is GameStatus.SURVIVED:
@@ -130,8 +136,6 @@ def record_result_if_final(force: bool = False) -> None:
         stats["best_score"] = max(stats["best_score"], game.score())
     else:
         stats["streak"] = 0
-    if ss.mode == "daily":
-        ss.daily_done = datetime.date.today().isoformat()
     if ss.mode == "survival":
         if game.status is GameStatus.SURVIVED:
             ss.survival_total += game.score()
@@ -208,10 +212,11 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     if clear_input:
         ss.guess_input = ""
     # rate the move: how well did it preserve the pool vs alternatives?
-    pool_before = game.pool_before(game.guesses_made - 1)
+    # (same seed/sample as act_review so live and review grades agree)
+    row = game.guesses_made - 1
     ss.ratings.append(A.rate_move(
-        A.analyzer_for(ss.lang), word, pool_before, game.secret,
-        rng=random.Random(game.guesses_made), sample_size=300))
+        A.analyzer_for(ss.lang), word, game.pool_before(row), game.secret,
+        rng=random.Random(f"{game.secret}:{row}"), sample_size=400))
     ss.hint_word = None
     ss.peek_words = None
     if game.status is GameStatus.WORDLED:
@@ -241,6 +246,7 @@ def act_random_start() -> None:
     ss = st.session_state
     game: DontWordleGame = ss.game
     if not game.is_over and game.guesses_made == 0:
+        _reseed_daily_rng("random-start")
         ss.guess_input = game.rng.choice(game.remaining_words)
 
 
@@ -251,6 +257,7 @@ def act_undo() -> None:
         ss.message = ("ok", "↩️ Guess taken back. Choose more carefully…")
         if ss.ratings:
             ss.ratings.pop()
+        ss.review = None  # any analysis refers to a board that no longer exists
         ss.hint_word = None
         ss.peek_words = None
     else:
@@ -264,13 +271,23 @@ def act_review() -> None:
     az = A.analyzer_for(ss.lang)
     ss.review = [
         A.rate_move(az, t.guess, game.pool_before(i), game.secret,
-                    rng=random.Random(i), sample_size=800)
+                    rng=random.Random(f"{game.secret}:{i}"), sample_size=400)
         for i, t in enumerate(game.history)
     ]
 
 
+def _reseed_daily_rng(facility: str) -> None:
+    """Daily games must give every player identical hints/peeks/randoms,
+    regardless of the order they use them in."""
+    ss = st.session_state
+    if ss.mode == "daily":
+        ss.game.rng.seed(f"daily:{ss.lang}:{datetime.date.today().isoformat()}"
+                         f":{facility}:{ss.game.guesses_made}")
+
+
 def act_hint() -> None:
     ss = st.session_state
+    _reseed_daily_rng("hint")
     h = ss.game.hint()
     if h:
         ss.hint_word = h
@@ -281,6 +298,7 @@ def act_hint() -> None:
 
 def act_peek() -> None:
     ss = st.session_state
+    _reseed_daily_rng("peek")
     sample = ss.game.peek()
     if sample:
         ss.peek_words = sample
@@ -381,7 +399,6 @@ CSS = """
          font-weight:700; font-size:0.95rem; color:#fff;
          background:#818384; text-transform:uppercase;
          box-shadow:0 1.5px 0 rgba(0,0,0,0.4);}
-.dw-meter {text-align:center; margin:2px 0 8px 0; font-weight:700;}
 .dw-counts {display:flex; justify-content:center; gap:34px;
             text-align:center; font-weight:700; margin-bottom:4px;}
 .dw-counts .lab {font-size:0.75rem; letter-spacing:0.1em; opacity:0.75;
@@ -583,6 +600,8 @@ def main() -> None:
                         st.success("Stats restored!")
                     else:
                         st.error("That doesn't look like a stats file.")
+                else:
+                    st.caption("✓ This backup is already loaded.")
 
         st.divider()
         st.markdown(
@@ -614,7 +633,7 @@ def main() -> None:
         r = ss.ratings[-1]
         st.caption(
             f"Move {len(ss.ratings)} safety: **{r.grade}** — kept "
-            f"**{r.retained:,}** of {r.pool_size:,} words, safer than "
+            f"**{r.retained:,}** of {r.pool_size:,} words, outperformed "
             f"{r.percentile:.0f}% of your options"
             f"{'' if r.exact else ' (estimated)'}")
     if ss.hint_word and not game.is_over:
@@ -674,7 +693,6 @@ def main() -> None:
             if game.can_undo():
                 st.button("↩️ Undo that fatal guess!", on_click=act_undo,
                           type="primary")
-        record_result_if_final(force=not game.can_undo())
         st.code(game.share_text(share_title()), language=None)
         st.caption("Copy the block above to share your result.")
 
@@ -688,7 +706,11 @@ def main() -> None:
             else:
                 for i, (t, r) in enumerate(zip(game.history, ss.review), 1):
                     approx = "" if r.exact else " (best found by sampling)"
-                    if r.word == r.best_word:
+                    if r.fatal and r.forced:
+                        verdict = "**no way out — it was the only word left**"
+                    elif r.fatal:
+                        verdict = "**that was the hidden word**"
+                    elif r.word == r.best_word and r.pool_size > 1:
                         verdict = "**perfect — nothing kept more**"
                     else:
                         verdict = (f"best: **{r.best_word.upper()}** "
@@ -709,6 +731,9 @@ def main() -> None:
                       on_click=act_new_game)
         else:
             st.button("🔁 Play again", on_click=act_new_game, type="primary")
+
+    # animations are one-shot: replay only after the next qualifying action
+    ss.last_action = None
 
 
 # run under `streamlit run` / AppTest, but stay importable for unit tests

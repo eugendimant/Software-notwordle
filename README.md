@@ -55,11 +55,12 @@ peeks cost points. Copy-paste emoji share cards included.
 ## Languages
 
 Play with 🇬🇧 English (14,855 words), 🇩🇪 German (11,623), 🇷🇺 Russian
-(26,744) or 🇪🇸 Spanish (12,891) dictionaries — the interface stays
-English. Secrets are drawn from the ~1,500–2,300 most common words per
-language; each language has its own keyboard layout, daily word and
-stats. Input is normalized to dictionary conventions (Russian ё→е,
-Spanish accents fold, ñ stays distinct).
+(8,126) or 🇪🇸 Spanish (12,891) dictionaries — the interface stays
+English. Secrets are curated common words (filtered against native
+dictionaries, English loan-words, names and profanity); each language
+has its own keyboard layout, daily word and stats. Input is normalized
+to dictionary conventions (Russian ё→е, Spanish accents fold, ñ stays
+distinct).
 
 ## Move analysis
 
@@ -91,7 +92,7 @@ dontwordle/
   analysis.py   numpy-vectorized move-quality analyzer
   data/<lang>/  per-language secrets + playable words (en/de/ru/es)
 app.py          Streamlit UI
-tests/          80+ tests: engine, analysis, self-play, AppTest UI
+tests/          ~80 tests: engine, analysis, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
@@ -105,6 +106,14 @@ python -m pytest
 
 ## Changelog
 
+- **1.4.0.1** — dual independent review pass: de/es/ru secret lists
+  rebuilt (native-dictionary ∩ frequency, minus English words, names and
+  profanity; Russian pool rebuilt from curated nouns — no more word
+  fragments); stale post-game analysis cleared on undo; daily practice
+  replays no longer farm stats; daily hints/peeks deterministic per
+  player order; fair mid-rank percentiles with 💀 fatal / ⚰️ forced
+  grades; live and review ratings now always agree; one-shot animations;
+  standard ЙЦУКЕН layout.
 - **1.4.0.0** — four dictionary languages (🇬🇧🇩🇪🇷🇺🇪🇸) with per-language
   keyboards, dailies and stats; live move-safety ratings; post-game
   best-move review (numpy-vectorized); balance re-tuned per language with

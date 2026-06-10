@@ -90,13 +90,19 @@ class MoveRating:
     word: str
     retained: int          # words kept for the next row
     pool_size: int         # options that were available
-    percentile: float      # 0–100: share of alternatives it beat or tied
+    percentile: float      # 0–100 mid-rank: share of alternatives beaten
     best_word: str         # safest alternative found
     best_retained: int
     exact: bool            # True if every alternative was checked
+    fatal: bool = False    # the played word WAS the secret
+    forced: bool = False   # there was nothing else to play
 
     @property
     def grade(self) -> str:
+        if self.forced:
+            return "⚰️ forced"   # no alternatives — not the player's fault
+        if self.fatal:
+            return "💀 fatal"
         p = self.percentile
         if p >= 90:
             return "🟢 brilliant"
@@ -130,7 +136,15 @@ def rate_move(analyzer: Analyzer, played: str, pool_before: list[str],
     retained = analyzer.retained_counts(candidates, pool_before, secret)
     mine = retained[candidates.index(played)]
     best_i = int(np.argmax(retained))
-    percentile = float((retained <= mine).mean() * 100)
+    # mid-rank percentile among the *other* options: ties count half, so
+    # the worst move reads 0%, an all-tie field reads 50%
+    others = len(retained) - 1
+    if others > 0:
+        worse = int((retained < mine).sum())
+        ties = int((retained == mine).sum()) - 1  # exclude the move itself
+        percentile = 100.0 * (worse + 0.5 * ties) / others
+    else:
+        percentile = 100.0
     return MoveRating(
         word=played,
         retained=int(mine),
@@ -139,6 +153,8 @@ def rate_move(analyzer: Analyzer, played: str, pool_before: list[str],
         best_word=candidates[best_i],
         best_retained=int(retained[best_i]),
         exact=exact,
+        fatal=played == secret,
+        forced=len(pool_before) == 1,
     )
 
 
