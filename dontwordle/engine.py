@@ -204,9 +204,32 @@ class DontWordleGame:
         if any(t.guess == word for t in self.history):
             return f"You already played “{word.upper()}”."
         if word not in self._pools[-1]:
-            return (f"“{word.upper()}” breaks the clues — you must re-use "
-                    "greens/yellows and avoid grays.")
+            return f"“{word.upper()}”: {self._diagnose_violation(word)}"
         return None
+
+    def _diagnose_violation(self, word: str) -> str:
+        """Pinpoint WHICH revealed clue the word breaks, most specific
+        first, so the player learns the rule they tripped on."""
+        from collections import Counter
+        wc = Counter(word)
+        for t in self.history:
+            colored = Counter()
+            for i, (gl, fl) in enumerate(zip(t.guess, t.feedback)):
+                if fl == GREEN and word[i] != gl:
+                    return (f"spot {i + 1} is locked to {gl.upper()} "
+                            "(green).")
+                if fl == YELLOW and word[i] == gl:
+                    return (f"{gl.upper()} can't sit in spot {i + 1} again "
+                            "— it was yellow there.")
+                if fl != GRAY:
+                    colored[gl] += 1
+            for letter, need in colored.items():
+                if wc[letter] < need:
+                    return f"must use {letter.upper()} — it's a known letter."
+            for gl, fl in zip(t.guess, t.feedback):
+                if fl == GRAY and wc[gl] > colored.get(gl, 0):
+                    return f"{gl.upper()} was ruled out — it's gray."
+        return "it breaks the revealed clues."
 
     def submit(self, word: str) -> TurnRecord:
         if self.is_over:

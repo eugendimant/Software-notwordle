@@ -126,6 +126,10 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.9** — clue-violation errors now name the exact rule you broke
+  ("E can't sit in spot 3 again — it was yellow there" / "spot 4 is
+  locked to N (green)" / "T was ruled out — it's gray" / "must use E")
+  instead of a generic catch-all; alert text compacted to fit one line.
 - **1.5.0.8** — flags render everywhere: Windows ships no flag emojis
   (browsers showed bare "GB DE" codes), so a Twemoji country-flag web
   font now covers exactly the flag codepoints on every OS; 🇺🇸 American

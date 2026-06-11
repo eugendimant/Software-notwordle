@@ -125,10 +125,31 @@ def test_invalid_guesses_rejected(game):
     game.submit("stone")
     with pytest.raises(InvalidGuess, match="already played"):
         game.submit("stone")
-    # 'stone' vs 'crane': n yellow, e green -> a gray-violating word rejected
-    with pytest.raises(InvalidGuess, match="breaks the clues"):
-        game.submit("toast")
+    # 'stone' vs 'crane' -> ---GG: 'tonne' fits the greens but uses gray T
+    with pytest.raises(InvalidGuess, match="T was ruled out"):
+        game.submit("tonne")
     assert game.guesses_made == 1
+
+
+def test_violation_diagnosis_is_specific():
+    # the bug-report scenario: TREAT vs CRANE gives E yellow in spot 3;
+    # BREAK satisfies the green R but puts E right back in spot 3
+    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g.submit("treat")
+    assert g.history[0].feedback == "-GYY-"
+    with pytest.raises(InvalidGuess,
+                       match="E can't sit in spot 3 again — it was yellow"):
+        g.submit("break")
+    # a word that ignores a green lock names the exact spot and letter
+    g2 = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g2.submit("stone")
+    with pytest.raises(InvalidGuess, match="spot 4 is locked to N"):
+        g2.submit("blare")
+    # dropping a known (yellow) letter is called out by name
+    g3 = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g3.submit("treat")
+    with pytest.raises(InvalidGuess, match="must use E"):
+        g3.submit("braid")
 
 
 def test_clue_filtering_shrinks_pool_and_keeps_secret(game):

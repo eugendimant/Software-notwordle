@@ -601,6 +601,11 @@ CSS = """
   font-family: "Twemoji Country Flags", "Source Sans Pro", "Source Code Pro",
                sans-serif;
 }
+/* feedback alerts: compact single-line text */
+[data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
 .block-container {max-width: 720px;}
 .dw-header {text-align:center; margin:-12px 0 2px 0;}
 .dw-title {font-family:'Helvetica Neue',Arial,sans-serif; font-weight:900;
