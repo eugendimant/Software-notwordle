@@ -14,10 +14,32 @@ APP = str(Path(__file__).parent.parent / "app.py")
 
 
 def make_app() -> AppTest:
+    """Boot the app and switch to typing mode (the historical default)
+    so the text-input-driven test helpers keep working; the clickable
+    keyboard is the product default and has its own dedicated tests."""
+    at = AppTest.from_file(APP, default_timeout=30)
+    at.run()
+    assert not at.exception
+    at.session_state["input_mode"] = "type"
+    at.run()
+    assert not at.exception
+    return at
+
+
+def make_click_app() -> AppTest:
+    """Boot with the product default (clickable keyboard)."""
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert not at.exception
     return at
+
+
+def test_clickable_keyboard_is_the_default():
+    at = make_click_app()
+    assert at.session_state["input_mode"] == "click"
+    assert at.button(key="kbd_q") is not None  # keyboard rendered
+    from dontwordle import words as W
+    assert W.LANGUAGES["en"].startswith("🇺🇸")  # American English
 
 
 def button(at: AppTest, prefix: str):
@@ -182,9 +204,7 @@ def test_word_length_switch_starts_fresh_game():
 
 
 def test_clickable_keyboard_full_flow():
-    at = make_app()
-    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
-    assert not at.exception
+    at = make_click_app()
     assert at.session_state["input_mode"] == "click"
     game = at.session_state["game"]
     game.secret = "crane"
@@ -214,8 +234,7 @@ def test_clickable_keyboard_full_flow():
 
 
 def test_clickable_keyboard_rejects_and_keeps_buffer():
-    at = make_app()
-    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
+    at = make_click_app()
     for letter in "zzzzz":
         at.button(key="kbd_z").click()
         at.run()
@@ -243,8 +262,7 @@ def test_stats_key_collision_merges_not_clobbers():
 
 
 def test_buffer_cleared_when_game_ends():
-    at = make_app()
-    at.radio(key="input_select").set_value("🔠 Clickable letters").run()
+    at = make_click_app()
     game = at.session_state["game"]
     game.secret = "crane"
     at.button(key="kbd_s").click()
