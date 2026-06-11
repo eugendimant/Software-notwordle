@@ -480,6 +480,62 @@ def test_next_daily_countdown_format():
     assert re.fullmatch(r"\d{1,2}h \d{2}m", app_module.next_daily_in())
 
 
+def test_win_awards_xp_and_achievements():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    assert "first_win" in at.session_state["achievements"]
+    assert at.session_state["xp"] >= at.session_state["game"].score()
+    blob = " ".join(str(el.value) for el in at.success)
+    assert "Achievement unlocked" in blob
+    # trophy case reflects the unlock
+    labels = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "First Dodge" in labels
+
+
+def test_loss_gives_participation_xp_only():
+    from dontwordle import achievements as ACH
+    at = make_app()
+    game = at.session_state["game"]
+    game.undos_used = game.config.max_undos  # make the loss final
+    guess(at, game.secret)
+    assert at.session_state["game"].status is GameStatus.WORDLED
+    assert at.session_state["xp"] == ACH.LOSS_XP
+    assert "first_win" not in at.session_state["achievements"]
+
+
+def test_daily_streak_and_quest_banner():
+    at = make_app()
+    # quest banner shows while playing the daily
+    page = " ".join(str(md.value) for md in at.markdown)
+    assert "Side-quest" in page
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    streaks = at.session_state["daily_streaks"]
+    assert streaks["en:5"]["streak"] == 1
+
+
+def test_backup_roundtrip_with_progress_fields():
+    import app as app_module
+    payload = app_module.parse_stats_json(
+        '{"stats": {}, "survival_best": 0, "xp": 1234, '
+        '"achievements": ["purist", "not_a_real_one"], '
+        '"daily_streaks": {"en:5": {"last": "2026-06-10", "streak": 4}, '
+        '"xx:9": {"last": "x", "streak": 1}}}')
+    assert payload["xp"] == 1234
+    assert payload["achievements"] == {"purist"}
+    assert payload["daily_streaks"] == {
+        "en:5": {"last": "2026-06-10", "streak": 4}}
+    # legacy files without the new fields still parse
+    legacy = app_module.parse_stats_json('{"stats": {}, "survival_best": 2}')
+    assert legacy["xp"] == 0 and legacy["achievements"] == set()
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

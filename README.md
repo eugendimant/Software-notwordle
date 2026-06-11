@@ -69,6 +69,19 @@ Type your guess (Enter submits) or flip the sidebar switch to a fully
 and lock, known letters glow green, and your picks preview live in the
 grid.
 
+## Progression & meta-game
+
+- **⭐ XP and levels** — every game earns XP (score on wins, a little on
+  losses); titles climb from *Word Novice* to *Grandmaster of Avoidance*.
+- **🏆 15 achievements** — from First Dodge to the legendary 👻 Ghost
+  (win revealing ≤8 clue tiles — simulation-tuned to ~1 in 20 sessions).
+  Trophy case in the sidebar shows what's still locked.
+- **🔥 Daily streaks** — consecutive daily wins per language & length,
+  flaunted on the banner.
+- **🎯 Daily side-quests** — one deterministic extra goal per day
+  ("win without a single undo", +XP), same for every player.
+- All progression travels with the stats backup file.
+
 ## Move analysis
 
 - **Live safety rating** after every guess: a grade (🟢 brilliant → 🔴
@@ -113,6 +126,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.4** — engagement layer: XP & 10-title level ladder, 15
+  achievements with sidebar trophy case and unlock toasts, per-language
+  daily streaks with 🔥 banner, deterministic daily side-quests with XP
+  bonuses, near-death drama tracking (Houdini/Daredevil unlocks);
+  thresholds tuned via 40-session bot simulation; progression persists
+  through stats backup (backward-compatible format).
 - **1.5.0.3** — strategy intel: 🧨 endgame trap forecast (once ≤30 words
   remain, see how many of your playable words lead straight into a
   trap — hidden in Impossible, where you're on your own); 🗒️ Zen word

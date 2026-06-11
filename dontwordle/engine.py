@@ -129,6 +129,9 @@ class DontWordleGame:
         # Stack of remaining playable pools, one entry per turn played,
         # so undo is O(1). Element 0 is the full dictionary.
         self._pools: list[list[str]] = [sorted(self.dictionary)]
+        # drama bookkeeping: the smallest pool ever reached this game
+        # (deliberately NOT reverted by undo — a near-death stays lived)
+        self.min_pool_seen = len(self._pools[0])
 
     # ------------------------------------------------------------------
     # State inspection
@@ -172,6 +175,11 @@ class DontWordleGame:
         return (self.status is GameStatus.PLAYING
                 and self._pools[-1] == [self.secret])
 
+    @property
+    def was_ever_trapped(self) -> bool:
+        """Did the pool collapse to just the secret at any point?"""
+        return self.min_pool_seen == 1
+
     def safe_words(self) -> list[str]:
         return [w for w in self._pools[-1] if w != self.secret]
 
@@ -210,6 +218,7 @@ class DontWordleGame:
         self._pools.append(
             [w for w in self._pools[-1] if is_consistent(w, word, feedback)]
         )
+        self.min_pool_seen = min(self.min_pool_seen, len(self._pools[-1]))
         if word == self.secret:
             self.status = GameStatus.WORDLED
         elif len(self.history) >= self.config.max_guesses:
