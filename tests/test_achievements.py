@@ -25,14 +25,27 @@ def test_loss_unlocks_nothing():
 
 def test_skill_achievements():
     ids = {a.id for a in ACH.evaluate(
-        ctx(undos=0, hints=0, peeks=0, min_pool_seen=1, greens=18,
-            score=450, streak=3), set())}
+        ctx(undos=0, hints=0, peeks=0, min_pool_seen=1, was_trapped=True,
+            greens=18, score=450, streak=3), set())}
     assert {"purist", "houdini", "greenhouse", "high_roller",
             "streak3"} <= ids
     assert "daredevil" not in ids        # trapped (1) is houdini, not 2
     assert "streak7" not in ids
     ids = {a.id for a in ACH.evaluate(ctx(min_pool_seen=2), set())}
     assert "daredevil" in ids and "houdini" not in ids
+    # a final winning guess collapsing the pool to 1 is NOT houdini:
+    # the trap was never actually faced
+    ids = {a.id for a in ACH.evaluate(
+        ctx(min_pool_seen=1, was_trapped=False), set())}
+    assert "houdini" not in ids
+
+
+def test_level_for_xp_bounded_against_hostile_values():
+    import time
+    t0 = time.perf_counter()
+    huge = ACH.level_for_xp(10**300)
+    assert time.perf_counter() - t0 < 0.5
+    assert huge == ACH.level_for_xp(ACH.XP_CAP)
 
 
 def test_ghost_and_calculated():

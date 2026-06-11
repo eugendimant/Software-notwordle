@@ -536,6 +536,60 @@ def test_backup_roundtrip_with_progress_fields():
     assert legacy["xp"] == 0 and legacy["achievements"] == set()
 
 
+def test_hostile_backup_files_rejected_or_clamped():
+    import app as app_module
+    from dontwordle import achievements as ACH
+    # absurd-but-finite xp is clamped, not allowed to hang the session
+    p = app_module.parse_stats_json('{"stats": {}, "xp": 1e300}')
+    assert p["xp"] == ACH.XP_CAP
+    # infinities used to raise OverflowError and crash the app
+    assert app_module.parse_stats_json('{"stats": {}, "xp": 1e999}') is None
+    assert app_module.parse_stats_json(
+        '{"stats": {}, "survival_best": 1e999}') is None
+    assert app_module.parse_stats_json(
+        '{"stats": {}, "daily_streaks": {"en:5": '
+        '{"last": "x", "streak": 1e999}}}') is None
+    # JSON *big integers* are arbitrary precision in Python — they used
+    # to sail through validation and crash the stats display later
+    big = "9" * 400
+    p = app_module.parse_stats_json(
+        '{"stats": {"daily:en:5": {"played": 1, "survived": ' + big +
+        '}}, "survival_best": ' + big + '}')
+    assert p["stats"]["daily:en:5"]["survived"] == app_module.NUM_CAP
+    assert p["survival_best"] == app_module.NUM_CAP
+
+
+def test_daily_done_travels_in_backup():
+    import app as app_module
+    p = app_module.parse_stats_json(
+        '{"stats": {}, "daily_done": ["2026-06-10:en:5", "garbage", '
+        '"2026-06-11:xx:5", "2026-06-11:de:9", "not-a-date:de:5"]}')
+    assert p["daily_done"] == {"2026-06-10:en:5"}
+
+
+def test_restored_daily_done_blocks_refarming():
+    import datetime
+    at = make_app()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_done"].add(f"{today}:en:5")  # as if restored
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    assert at.session_state["xp"] == 0
+    assert at.session_state["stats"].get(
+        "daily:en:5", {}).get("played", 0) == 0
+
+
+def test_derive_session_wins_from_stats():
+    import app as app_module
+    langs, lengths = app_module.derive_session_wins({
+        "classic:de:5": {"survived": 2}, "daily:en:6": {"survived": 1},
+        "hard:ru:4": {"survived": 0}})
+    assert langs == {"de", "en"} and lengths == {5, 6}
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

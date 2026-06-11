@@ -34,6 +34,7 @@ class GameContext:
     yellows: int = 0
     min_pool_seen: int = 10**9
     final_pool: int = 10**9
+    was_trapped: bool = False        # actually faced a 1-word pool
     survival_round: int = 1
     streak: int = 0                  # mode streak after this game
     total_wins: int = 0              # across all modes/langs/lengths
@@ -59,10 +60,10 @@ ACHIEVEMENTS: dict[str, tuple[Achievement, object]] = {
          lambda c: c.won and c.min_pool_seen == 2),
         (Achievement("houdini", "🪄", "Houdini",
                      "Get trapped — only the secret left — and still win."),
-         lambda c: c.won and c.min_pool_seen == 1),
-        # thresholds tuned by simulation: ~1% of wins reach Ghost (the
-        # theoretical floor is 8 — full gray is impossible under the
-        # consistency rule), ~10% reach Greenhouse
+         lambda c: c.won and c.was_trapped),
+        # thresholds tuned by simulation: Ghost ≈ 1% of wins ≈ 1 in 20
+        # twelve-game sessions (the theoretical floor is 8 — full gray is
+        # impossible under the consistency rule); Greenhouse ≈ 10% of wins
         (Achievement("ghost", "👻", "Ghost",
                      "Win revealing 8 clue tiles or fewer."),
          lambda c: c.won and c.greens + c.yellows <= 8),
@@ -90,10 +91,12 @@ ACHIEVEMENTS: dict[str, tuple[Achievement, object]] = {
                      "Win at all three word lengths."),
          lambda c: c.won and c.lengths_won >= {4, 5, 6}),
         (Achievement("streak3", "🔥", "On Fire",
-                     "Win 3 in a row in one mode."),
+                     "Win 3 in a row in the same mode "
+                     "(per language & length)."),
          lambda c: c.won and c.streak >= 3),
         (Achievement("streak7", "🌋", "Unstoppable",
-                     "Win 7 in a row in one mode."),
+                     "Win 7 in a row in the same mode "
+                     "(per language & length)."),
          lambda c: c.won and c.streak >= 7),
         (Achievement("veteran25", "🎖️", "Veteran",
                      "Survive 25 games in total."),
@@ -130,6 +133,9 @@ TITLES = (
 )
 
 
+XP_CAP = 10**9         # sanity ceiling (also enforced on backup import)
+
+
 def _xp_to_advance(level: int) -> int:
     """XP needed to go from ``level`` to ``level + 1`` (gentle ramp)."""
     return 250 + 150 * (level - 1)
@@ -137,7 +143,8 @@ def _xp_to_advance(level: int) -> int:
 
 def level_for_xp(xp: int) -> dict:
     """Level, title, and progress toward the next level."""
-    level, remaining = 1, max(0, int(xp))
+    level = 1
+    remaining = min(max(0, int(xp)), XP_CAP)  # capped: O(√cap) worst case
     while remaining >= _xp_to_advance(level):
         remaining -= _xp_to_advance(level)
         level += 1

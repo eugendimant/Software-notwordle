@@ -177,6 +177,7 @@ def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
         undos=game.undos_used, hints=game.hints_used, peeks=game.peeks_used,
         greens=greens, yellows=yellows,
         min_pool_seen=game.min_pool_seen, final_pool=game.remaining_count,
+        was_trapped=game.was_ever_trapped,
         survival_round=ss.survival_round, streak=stats["streak"],
         total_wins=sum(s["survived"] for s in ss.stats.values()),
         rating_percentiles=[r.percentile for r in ss.ratings],
@@ -472,8 +473,18 @@ def export_stats_json() -> str:
                        "stats": ss.stats, "survival_best": ss.survival_best,
                        "xp": ss.xp,
                        "achievements": sorted(ss.achievements),
-                       "daily_streaks": ss.daily_streaks},
+                       "daily_streaks": ss.daily_streaks,
+                       "daily_done": sorted(ss.daily_done)},
                       indent=2)
+
+
+NUM_CAP = 10**9  # ceiling for every numeric backup field
+
+
+def _num(value, cap: int = NUM_CAP) -> int:
+    """Clamp any user-supplied number: JSON big-ints are arbitrary
+    precision in Python and would overflow float math downstream."""
+    return min(max(0, int(value)), cap)
 
 
 def parse_stats_json(text: str) -> dict | None:
@@ -498,7 +509,7 @@ def parse_stats_json(text: str) -> dict | None:
             norm = valid_key(key)
             if not norm or not isinstance(s, dict):
                 continue
-            incoming = {k: max(0, int(s.get(k, 0))) for k in STAT_KEYS}
+            incoming = {k: _num(s.get(k, 0)) for k in STAT_KEYS}
             if norm in clean:  # legacy + new key collided: keep the best
                 incoming = {k: max(incoming[k], clean[norm][k])
                             for k in STAT_KEYS}
@@ -513,14 +524,37 @@ def parse_stats_json(text: str) -> dict | None:
                     and isinstance(e, dict)):
                 streaks[f"{lang}:{int(length)}"] = {
                     "last": str(e.get("last", "")),
-                    "streak": max(0, int(e.get("streak", 0)))}
+                    "streak": _num(e.get("streak", 0))}
+        done = set()
+        for key in data.get("daily_done", []):
+            date_s, _, rest = str(key).partition(":")
+            lang, _, length = rest.partition(":")
+            try:
+                datetime.date.fromisoformat(date_s)
+            except ValueError:
+                continue
+            if (lang in W.LANGUAGES and length.isdigit()
+                    and int(length) in W.WORD_LENGTHS and len(done) < 5000):
+                done.add(f"{date_s}:{lang}:{int(length)}")
         return {"stats": clean,
-                "survival_best": max(0, int(data.get("survival_best", 0))),
-                "xp": max(0, int(data.get("xp", 0))),
+                "survival_best": _num(data.get("survival_best", 0)),
+                "xp": _num(data.get("xp", 0), ACH.XP_CAP),
                 "achievements": achievements,
-                "daily_streaks": streaks}
-    except (ValueError, TypeError, KeyError, AttributeError):
+                "daily_streaks": streaks,
+                "daily_done": done}
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
         return None
+
+
+def derive_session_wins(stats: dict) -> tuple[set, set]:
+    """Languages and lengths with at least one win, from stats keys."""
+    langs, lengths = set(), set()
+    for key, s in stats.items():
+        if s.get("survived", 0) > 0:
+            _, lang, length = key.split(":")
+            langs.add(lang)
+            lengths.add(int(length))
+    return langs, lengths
 
 
 def fmt(n: int) -> str:
@@ -961,6 +995,11 @@ def main() -> None:
                         ss.xp = payload["xp"]
                         ss.achievements = payload["achievements"]
                         ss.daily_streaks = payload["daily_streaks"]
+                        ss.daily_done = payload["daily_done"]
+                        # rebuild session win sets so Polyglot/Triathlete
+                        # progress survives the restore
+                        ss.wins_langs, ss.wins_lengths = \
+                            derive_session_wins(payload["stats"])
                         st.success("Stats restored!")
                     else:
                         st.error("That doesn't look like a stats file.")
@@ -992,8 +1031,11 @@ def main() -> None:
             f'<span class="sub">— {datetime.date.today():%B %d, %Y}'
             f'</span>{flame}</div>', unsafe_allow_html=True)
         if not game.is_over:
-            quest = ACH.daily_quest(datetime.date.today().isoformat(),
-                                    ss.lang, ss.word_len)
+            # use the date pinned at game creation so the banner and the
+            # award agree even across midnight
+            quest_date = (ss.get("daily_key")
+                          or datetime.date.today().isoformat()).split(":")[0]
+            quest = ACH.daily_quest(quest_date, ss.lang, ss.word_len)
             st.markdown(
                 f'<div class="dw-banner"><span class="sub">🎯 Side-quest: '
                 f'{quest.label} (+{quest.xp} XP)</span></div>',

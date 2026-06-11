@@ -112,7 +112,7 @@ dontwordle/
   analysis.py   numpy-vectorized move-quality analyzer
   data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
-tests/          ~100 tests: engine, analysis, self-play, AppTest UI
+tests/          120+ tests: engine, analysis, meta-game, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
@@ -126,6 +126,15 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.5** — double deep-check hardening (3 review agents): hostile
+  backup files can no longer hang (unbounded XP → capped level math) or
+  crash the app (float infinities and 400-digit JSON integers now
+  rejected/clamped on every numeric field); daily XP/quests can't be
+  re-farmed through backup restore (daily_done travels in the file);
+  Polyglot/Triathlete progress survives restores; Houdini now requires
+  actually *facing* the trap; quest banner and award agree across
+  midnight; doc/desc accuracy pass. Plus docs/APP_STORE_GUIDE.md — the
+  honest iPhone App Store playbook.
 - **1.5.0.4** — engagement layer: XP & 10-title level ladder, 15
   achievements with sidebar trophy case and unlock toasts, per-language
   daily streaks with 🔥 banner, deterministic daily side-quests with XP

@@ -132,6 +132,7 @@ class DontWordleGame:
         # drama bookkeeping: the smallest pool ever reached this game
         # (deliberately NOT reverted by undo — a near-death stays lived)
         self.min_pool_seen = len(self._pools[0])
+        self._trap_faced = False  # player acted while only the secret remained
 
     # ------------------------------------------------------------------
     # State inspection
@@ -177,8 +178,10 @@ class DontWordleGame:
 
     @property
     def was_ever_trapped(self) -> bool:
-        """Did the pool collapse to just the secret at any point?"""
-        return self.min_pool_seen == 1
+        """Did the player ever have to act while trapped? (A final winning
+        guess that merely collapses the pool to the secret doesn't count —
+        no trap was actually faced.)"""
+        return self._trap_faced
 
     def safe_words(self) -> list[str]:
         return [w for w in self._pools[-1] if w != self.secret]
@@ -208,6 +211,8 @@ class DontWordleGame:
     def submit(self, word: str) -> TurnRecord:
         if self.is_over:
             raise InvalidGuess("The game is over.")
+        if self.is_trapped:
+            self._trap_faced = True
         word = word.strip().lower()
         reason = self.validate(word)
         if reason:
@@ -234,6 +239,8 @@ class DontWordleGame:
         """Take back the latest guess (allowed even after losing)."""
         if not self.can_undo():
             return False
+        if self.is_trapped:
+            self._trap_faced = True  # undoing out of a trap = facing it
         self.history.pop()
         self._pools.pop()
         self.undos_used += 1
