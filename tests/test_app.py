@@ -480,6 +480,157 @@ def test_next_daily_countdown_format():
     assert re.fullmatch(r"\d{1,2}h \d{2}m", app_module.next_daily_in())
 
 
+def test_win_awards_xp_and_achievements():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    assert "first_win" in at.session_state["achievements"]
+    assert at.session_state["xp"] >= at.session_state["game"].score()
+    blob = " ".join(str(el.value) for el in at.success)
+    assert "Achievement unlocked" in blob
+    # trophy case reflects the unlock
+    labels = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "First Dodge" in labels
+
+
+def test_loss_gives_participation_xp_only():
+    from dontwordle import achievements as ACH
+    at = make_app()
+    game = at.session_state["game"]
+    game.undos_used = game.config.max_undos  # make the loss final
+    guess(at, game.secret)
+    assert at.session_state["game"].status is GameStatus.WORDLED
+    assert at.session_state["xp"] == ACH.LOSS_XP
+    assert "first_win" not in at.session_state["achievements"]
+
+
+def test_daily_streak_and_quest_banner():
+    at = make_app()
+    # quest banner shows while playing the daily
+    page = " ".join(str(md.value) for md in at.markdown)
+    assert "Side-quest" in page
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    streaks = at.session_state["daily_streaks"]
+    assert streaks["en:5"]["streak"] == 1
+
+
+def test_backup_roundtrip_with_progress_fields():
+    import app as app_module
+    payload = app_module.parse_stats_json(
+        '{"stats": {}, "survival_best": 0, "xp": 1234, '
+        '"achievements": ["purist", "not_a_real_one"], '
+        '"daily_streaks": {"en:5": {"last": "2026-06-10", "streak": 4}, '
+        '"xx:9": {"last": "x", "streak": 1}}}')
+    assert payload["xp"] == 1234
+    assert payload["achievements"] == {"purist"}
+    assert payload["daily_streaks"] == {
+        "en:5": {"last": "2026-06-10", "streak": 4}}
+    # legacy files without the new fields still parse
+    legacy = app_module.parse_stats_json('{"stats": {}, "survival_best": 2}')
+    assert legacy["xp"] == 0 and legacy["achievements"] == set()
+
+
+def test_hostile_backup_files_rejected_or_clamped():
+    import app as app_module
+    from dontwordle import achievements as ACH
+    # absurd-but-finite xp is clamped, not allowed to hang the session
+    p = app_module.parse_stats_json('{"stats": {}, "xp": 1e300}')
+    assert p["xp"] == ACH.XP_CAP
+    # infinities used to raise OverflowError and crash the app
+    assert app_module.parse_stats_json('{"stats": {}, "xp": 1e999}') is None
+    assert app_module.parse_stats_json(
+        '{"stats": {}, "survival_best": 1e999}') is None
+    assert app_module.parse_stats_json(
+        '{"stats": {}, "daily_streaks": {"en:5": '
+        '{"last": "x", "streak": 1e999}}}') is None
+    # JSON *big integers* are arbitrary precision in Python — they used
+    # to sail through validation and crash the stats display later
+    big = "9" * 400
+    p = app_module.parse_stats_json(
+        '{"stats": {"daily:en:5": {"played": 1, "survived": ' + big +
+        '}}, "survival_best": ' + big + '}')
+    assert p["stats"]["daily:en:5"]["survived"] == app_module.NUM_CAP
+    assert p["survival_best"] == app_module.NUM_CAP
+
+
+def test_daily_done_travels_in_backup():
+    import app as app_module
+    p = app_module.parse_stats_json(
+        '{"stats": {}, "daily_done": ["2026-06-10:en:5", "garbage", '
+        '"2026-06-11:xx:5", "2026-06-11:de:9", "not-a-date:de:5"]}')
+    assert p["daily_done"] == {"2026-06-10:en:5"}
+
+
+def test_restored_daily_done_blocks_refarming():
+    import datetime
+    at = make_app()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_done"].add(f"{today}:en:5")  # as if restored
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    assert at.session_state["xp"] == 0
+    assert at.session_state["stats"].get(
+        "daily:en:5", {}).get("played", 0) == 0
+
+
+def test_derive_session_wins_from_stats():
+    import app as app_module
+    langs, lengths = app_module.derive_session_wins({
+        "classic:de:5": {"survived": 2}, "daily:en:6": {"survived": 1},
+        "hard:ru:4": {"survived": 0}})
+    assert langs == {"de", "en"} and lengths == {5, 6}
+
+
+def test_daily_streak_nudge_in_sidebar():
+    import datetime
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎲 Classic").run()
+    at.session_state["daily_streaks"]["en:5"] = {
+        "last": (datetime.date.today()
+                 - datetime.timedelta(days=1)).isoformat(), "streak": 4}
+    at.run()
+    blob = " ".join(str(el.value) for el in at.sidebar.warning)
+    assert "4-day daily streak is on the line" in blob
+    # once today's daily is done, the nudge disappears
+    at.session_state["daily_done"].add(
+        f"{datetime.date.today().isoformat()}:en:5")
+    at.run()
+    blob = " ".join(str(el.value) for el in at.sidebar.warning)
+    assert "on the line" not in blob
+
+
+def test_session_log_and_share_card_meta():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    # share card now carries level + trophy count
+    blob = " ".join(str(el.value) for el in at.code)
+    assert "⭐ Level" in blob and "🏆" in blob
+    log = at.session_state["session_log"]
+    assert len(log) == 1 and log[0]["won"] and log[0]["mode"] == "daily"
+    # a loss is logged too
+    button(at, "🔁 Replay today's word").click()
+    at.run()
+    game = at.session_state["game"]
+    game.undos_used = game.config.max_undos
+    guess(at, game.secret)
+    log = at.session_state["session_log"]
+    assert len(log) == 2 and not log[1]["won"]
+    side = " ".join(str(md.value) for md in at.sidebar.caption)
+    assert "pts" in side  # recap rendered
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

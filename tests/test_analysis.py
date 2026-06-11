@@ -211,6 +211,26 @@ def test_daily_secret_weighted_and_deterministic():
             assert s in W.answers(lang, length)
 
 
+def test_best_safe_hint_is_safe_and_beats_random():
+    from dontwordle.analysis import best_safe_hint
+    az = analyzer_for("en")
+    g = DontWordleGame("crane", W.allowed_guesses(), PRESETS["classic"])
+    g.submit("aahed")
+    pool = list(g.remaining_words)
+    rng = random.Random(4)
+    hint = best_safe_hint(az, pool, "crane", rng)
+    assert hint in pool and hint != "crane"
+    # the smart hint must retain at least as much as the average safe word
+    safe = [w for w in pool if w != "crane"]
+    sample = random.Random(9).sample(safe, 30)
+    retained = az.retained_counts(sample + [hint], pool, "crane")
+    assert retained[-1] >= retained[:-1].mean()
+    # deterministic given the same rng seed
+    assert hint == best_safe_hint(az, pool, "crane", random.Random(4))
+    # pool of just the secret -> no hint
+    assert best_safe_hint(az, ["crane"], "crane", rng) is None
+
+
 def test_normalize_guess():
     assert W.normalize_guess("Ёлка!".strip("!"), "ru") == "елка"
     assert W.normalize_guess("común", "es") == "comun"

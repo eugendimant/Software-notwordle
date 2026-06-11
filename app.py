@@ -13,6 +13,7 @@ import random
 import streamlit as st
 
 from dontwordle import __homepage__, __version__
+from dontwordle import achievements as ACH
 from dontwordle import analysis as A
 from dontwordle import words as W
 from dontwordle.engine import (
@@ -103,6 +104,13 @@ def init_state() -> None:
     ss.setdefault("survival_total", 0)
     ss.setdefault("survival_best", 0)
     ss.setdefault("stats", {})         # mode -> dict
+    ss.setdefault("xp", 0)
+    ss.setdefault("achievements", set())   # unlocked achievement ids
+    ss.setdefault("game_unlocks", [])      # banners for the end panel
+    ss.setdefault("daily_streaks", {})     # "lang:len" -> {last, streak}
+    ss.setdefault("wins_langs", set())
+    ss.setdefault("wins_lengths", set())
+    ss.setdefault("session_log", [])       # recap of finished games
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -131,6 +139,12 @@ def record_result_if_final(force: bool = False) -> None:
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
         return
     ss.recorded = True
+    # the session recap lists every finished game (even daily practice
+    # replays, which are excluded from stats/XP below)
+    ss.session_log = (ss.session_log + [{
+        "mode": ss.mode, "lang": ss.lang, "len": ss.word_len,
+        "won": game.status is GameStatus.SURVIVED,
+        "score": game.score()}])[-20:]
     if ss.mode == "daily":
         daily_key = ss.get("daily_key") or (
             f"{datetime.date.today().isoformat()}:{ss.lang}:{ss.word_len}")
@@ -153,6 +167,71 @@ def record_result_if_final(force: bool = False) -> None:
             ss.survival_best = max(ss.survival_best, ss.survival_total)
         else:
             ss.survival_best = max(ss.survival_best, ss.survival_total)
+    _award_progress(game, stats)
+
+
+def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
+    ss = st.session_state
+    won = game.status is GameStatus.SURVIVED
+    if won:
+        ss.wins_langs.add(ss.lang)
+        ss.wins_lengths.add(ss.word_len)
+    greens = sum(t.feedback.count(GREEN) for t in game.history)
+    yellows = sum(t.feedback.count(YELLOW) for t in game.history)
+    return ACH.GameContext(
+        mode=ss.mode, lang=ss.lang, length=ss.word_len,
+        won=won, score=game.score(),
+        undos=game.undos_used, hints=game.hints_used, peeks=game.peeks_used,
+        greens=greens, yellows=yellows,
+        min_pool_seen=game.min_pool_seen, final_pool=game.remaining_count,
+        was_trapped=game.was_ever_trapped,
+        survival_round=ss.survival_round, streak=stats["streak"],
+        total_wins=sum(s["survived"] for s in ss.stats.values()),
+        rating_percentiles=[r.percentile for r in ss.ratings],
+        langs_won=set(ss.wins_langs), lengths_won=set(ss.wins_lengths),
+    )
+
+
+def _award_progress(game: DontWordleGame, stats: dict) -> None:
+    """XP, achievements, daily streaks and side-quests — recorded exactly
+    once per game (guarded by the caller's `recorded` flag)."""
+    ss = st.session_state
+    ctx = _build_context(game, stats)
+    before = ACH.level_for_xp(ss.xp)["level"]
+    fresh = ACH.evaluate(ctx, ss.achievements)
+    quest_bonus = 0
+    if ss.mode == "daily" and ctx.won:
+        date_iso = (ss.get("daily_key") or datetime.date.today().isoformat()
+                    ).split(":")[0]
+        quest = ACH.daily_quest(date_iso, ss.lang, ss.word_len)
+        if ACH.quest_completed(quest.id, ctx):
+            quest_bonus = quest.xp
+            ss.game_unlocks.append(
+                f"🎯 Side-quest complete: {quest.label} (+{quest.xp} XP)")
+        # daily streak: consecutive calendar days per language+length
+        skey = f"{ss.lang}:{ss.word_len}"
+        entry = ss.daily_streaks.get(skey, {"last": "", "streak": 0})
+        today = datetime.date.fromisoformat(date_iso)
+        prev = entry["last"]
+        if prev == (today - datetime.timedelta(days=1)).isoformat():
+            entry = {"last": date_iso, "streak": entry["streak"] + 1}
+        elif prev != date_iso:
+            entry = {"last": date_iso, "streak": 1}
+        ss.daily_streaks[skey] = entry
+    gained = ACH.xp_for_game(ctx, len(fresh)) + quest_bonus
+    ss.xp += gained
+    for ach in fresh:
+        ss.achievements.add(ach.id)
+        ss.game_unlocks.append(
+            f"{ach.emoji} Achievement unlocked: **{ach.name}** — "
+            f"{ach.description} (+{ACH.UNLOCK_XP} XP)")
+        st.toast(f"{ach.emoji} {ach.name} unlocked!")
+    after = ACH.level_for_xp(ss.xp)
+    if after["level"] > before:
+        ss.game_unlocks.append(
+            f"⭐ Level up! You are now level {after['level']} — "
+            f"*{after['title']}*")
+        st.toast(f"⭐ Level {after['level']}: {after['title']}!")
 
 
 def _ensure_state() -> None:
@@ -185,6 +264,7 @@ def act_new_game(next_round: bool = False) -> None:
     ss.review = None
     ss.kbd_buffer = ""
     ss.guess_input = ""  # don't carry a typed word into the new game
+    ss.game_unlocks = []
     ss.last_action = "new"
 
 
@@ -367,10 +447,17 @@ def act_hint() -> None:
     _ensure_state()
     ss = st.session_state
     _reseed_daily_rng("hint")
-    h = ss.game.hint()
+    game: DontWordleGame = ss.game
+    az = A.analyzer_for(ss.lang, game.word_length)
+
+    def smart(safe, rng):  # safest sampled word, not just any safe word
+        return A.best_safe_hint(az, game.remaining_words, game.secret, rng)
+
+    h = game.hint(chooser=smart)
     if h:
         ss.hint_word = h
-        ss.message = ("ok", "🛟 The oracle whispers a guaranteed-safe word.")
+        ss.message = ("ok", "🛟 The oracle whispers a *good* safe word — "
+                            "it keeps your options wide open.")
     else:
         ss.message = ("error", "No hint available.")
 
@@ -397,8 +484,21 @@ STAT_KEYS = ("played", "survived", "streak", "best_streak", "best_score")
 def export_stats_json() -> str:
     ss = st.session_state
     return json.dumps({"app": "dontwordle", "version": __version__,
-                       "stats": ss.stats, "survival_best": ss.survival_best},
+                       "stats": ss.stats, "survival_best": ss.survival_best,
+                       "xp": ss.xp,
+                       "achievements": sorted(ss.achievements),
+                       "daily_streaks": ss.daily_streaks,
+                       "daily_done": sorted(ss.daily_done)},
                       indent=2)
+
+
+NUM_CAP = 10**9  # ceiling for every numeric backup field
+
+
+def _num(value, cap: int = NUM_CAP) -> int:
+    """Clamp any user-supplied number: JSON big-ints are arbitrary
+    precision in Python and would overflow float math downstream."""
+    return min(max(0, int(value)), cap)
 
 
 def parse_stats_json(text: str) -> dict | None:
@@ -423,15 +523,52 @@ def parse_stats_json(text: str) -> dict | None:
             norm = valid_key(key)
             if not norm or not isinstance(s, dict):
                 continue
-            incoming = {k: max(0, int(s.get(k, 0))) for k in STAT_KEYS}
+            incoming = {k: _num(s.get(k, 0)) for k in STAT_KEYS}
             if norm in clean:  # legacy + new key collided: keep the best
                 incoming = {k: max(incoming[k], clean[norm][k])
                             for k in STAT_KEYS}
             clean[norm] = incoming
+        achievements = {a for a in data.get("achievements", [])
+                        if isinstance(a, str) and a in ACH.ACHIEVEMENTS}
+        streaks = {}
+        for key, e in (data.get("daily_streaks") or {}).items():
+            lang, _, length = str(key).partition(":")
+            if (lang in W.LANGUAGES and length.isdigit()
+                    and int(length) in W.WORD_LENGTHS
+                    and isinstance(e, dict)):
+                streaks[f"{lang}:{int(length)}"] = {
+                    "last": str(e.get("last", "")),
+                    "streak": _num(e.get("streak", 0))}
+        done = set()
+        for key in data.get("daily_done", []):
+            date_s, _, rest = str(key).partition(":")
+            lang, _, length = rest.partition(":")
+            try:
+                datetime.date.fromisoformat(date_s)
+            except ValueError:
+                continue
+            if (lang in W.LANGUAGES and length.isdigit()
+                    and int(length) in W.WORD_LENGTHS and len(done) < 5000):
+                done.add(f"{date_s}:{lang}:{int(length)}")
         return {"stats": clean,
-                "survival_best": max(0, int(data.get("survival_best", 0)))}
-    except (ValueError, TypeError, KeyError, AttributeError):
+                "survival_best": _num(data.get("survival_best", 0)),
+                "xp": _num(data.get("xp", 0), ACH.XP_CAP),
+                "achievements": achievements,
+                "daily_streaks": streaks,
+                "daily_done": done}
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
         return None
+
+
+def derive_session_wins(stats: dict) -> tuple[set, set]:
+    """Languages and lengths with at least one win, from stats keys."""
+    langs, lengths = set(), set()
+    for key, s in stats.items():
+        if s.get("survived", 0) > 0:
+            _, lang, length = key.split(":")
+            langs.add(lang)
+            lengths.add(int(length))
+    return langs, lengths
 
 
 def fmt(n: int) -> str:
@@ -778,6 +915,10 @@ def main() -> None:
     with st.sidebar:
         st.title("🙅 DON'T Wordle")
         st.caption("Whatever you do — don't say the word.")
+        lv = ACH.level_for_xp(ss.xp)
+        st.progress(lv["into"] / lv["needed"],
+                    text=f"⭐ Level {lv['level']} · {lv['title']} · "
+                         f"{ss.xp:,} XP")
         langs = list(W.LANGUAGES)
         c1, c2 = st.columns([3, 2])
         c1.selectbox("Language", langs,
@@ -802,6 +943,17 @@ def main() -> None:
                  help="Changing mode starts a fresh game.")
         st.caption(MODE_HELP[ss.mode])
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
+        # retention nudge: today's daily for this combo is still unplayed
+        today_key = (f"{datetime.date.today().isoformat()}:"
+                     f"{ss.lang}:{ss.word_len}")
+        if ss.mode != "daily" and today_key not in ss.daily_done:
+            streak = ss.daily_streaks.get(
+                f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
+            if streak >= 1:
+                st.warning(f"🔥 Your {streak}-day daily streak is on the "
+                           "line — today's word is waiting!")
+            else:
+                st.caption("📅 Today's daily word is still waiting for you.")
 
         st.divider()
         st.subheader("📊 Your stats")
@@ -838,6 +990,27 @@ def main() -> None:
                 "- Surviving with more 🟩/🟨 on the board scores higher."
             )
 
+        if ss.session_log:
+            wins = sum(e["won"] for e in ss.session_log)
+            with st.expander(f"🕑 This session ({wins}/"
+                             f"{len(ss.session_log)} survived)"):
+                label_of = {v: k for k, v in MODES.items()}
+                for e in reversed(ss.session_log[-8:]):
+                    icon = "✅" if e["won"] else "💀"
+                    st.caption(f"{icon} {label_of[e['mode']]} · "
+                               f"{e['lang']}·{e['len']} — "
+                               f"{e['score']} pts")
+
+        n_unlocked = len(ss.achievements)
+        with st.expander(f"🏆 Trophy case ({n_unlocked}/"
+                         f"{len(ACH.ACHIEVEMENTS)})"):
+            for ach, _ in ACH.ACHIEVEMENTS.values():
+                if ach.id in ss.achievements:
+                    st.markdown(f"{ach.emoji} **{ach.name}** — "
+                                f"{ach.description}")
+                else:
+                    st.caption(f"🔒 {ach.name} — {ach.description}")
+
         with st.expander("💾 Backup stats"):
             st.caption("Stats live in this browser session. Download them "
                        "to keep, re-upload to restore.")
@@ -855,6 +1028,14 @@ def main() -> None:
                     if payload:
                         ss.stats = payload["stats"]
                         ss.survival_best = payload["survival_best"]
+                        ss.xp = payload["xp"]
+                        ss.achievements = payload["achievements"]
+                        ss.daily_streaks = payload["daily_streaks"]
+                        ss.daily_done = payload["daily_done"]
+                        # rebuild session win sets so Polyglot/Triathlete
+                        # progress survives the restore
+                        ss.wins_langs, ss.wins_lengths = \
+                            derive_session_wins(payload["stats"])
                         st.success("Stats restored!")
                     else:
                         st.error("That doesn't look like a stats file.")
@@ -877,10 +1058,24 @@ def main() -> None:
             f'{game.config.max_undos} undo(s) this round</span></div>',
             unsafe_allow_html=True)
     elif ss.mode == "daily":
+        streak = ss.daily_streaks.get(
+            f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
+        flame = f' · <span class="sub">🔥 {streak}-day streak</span>' \
+            if streak >= 2 else ""
         st.markdown(
             f'<div class="dw-banner">📅 Daily Challenge '
             f'<span class="sub">— {datetime.date.today():%B %d, %Y}'
-            f'</span></div>', unsafe_allow_html=True)
+            f'</span>{flame}</div>', unsafe_allow_html=True)
+        if not game.is_over:
+            # use the date pinned at game creation so the banner and the
+            # award agree even across midnight
+            quest_date = (ss.get("daily_key")
+                          or datetime.date.today().isoformat()).split(":")[0]
+            quest = ACH.daily_quest(quest_date, ss.lang, ss.word_len)
+            st.markdown(
+                f'<div class="dw-banner"><span class="sub">🎯 Side-quest: '
+                f'{quest.label} (+{quest.xp} XP)</span></div>',
+                unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
     buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
@@ -994,7 +1189,13 @@ def main() -> None:
             if game.can_undo():
                 st.button("↩️ Undo that fatal guess!", on_click=act_undo,
                           type="primary")
-        st.code(game.share_text(share_title()), language=None)
+        for note in ss.game_unlocks:
+            st.success(note)
+        lv = ACH.level_for_xp(ss.xp)
+        share_block = (game.share_text(share_title())
+                       + f"\n⭐ Level {lv['level']} {lv['title']} · "
+                         f"🏆 {len(ss.achievements)}/{len(ACH.ACHIEVEMENTS)}")
+        st.code(share_block, language=None)
         st.caption("Copy the block above to share your result.")
 
         with st.expander("🔬 Best-move review", expanded=ss.review is not None):

@@ -252,6 +252,23 @@ def test_score_floor_flagged():
     assert bd["total"] == 10 and bd["floored"]
 
 
+def test_trap_faced_semantics():
+    # acting while trapped (submit or undo) marks the trap as faced
+    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["classic"])
+    g._pools[-1] = ["crane"]
+    assert g.is_trapped and not g.was_ever_trapped
+    g.submit("crane")
+    assert g.was_ever_trapped
+    # a final winning guess that merely collapses the pool does NOT count
+    g2 = DontWordleGame("crane", words.allowed_guesses(),
+                        GameConfig("T", max_guesses=1, max_undos=0))
+    g2._pools[-1] = ["crane", "stone"]
+    g2.submit("stone")  # survives; pool collapses to [crane] afterwards
+    assert g2.status is GameStatus.SURVIVED
+    assert g2.min_pool_seen == 1
+    assert not g2.was_ever_trapped
+
+
 def test_presets_sane():
     for key, cfg in PRESETS.items():
         assert cfg.max_guesses >= 6

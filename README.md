@@ -69,6 +69,19 @@ Type your guess (Enter submits) or flip the sidebar switch to a fully
 and lock, known letters glow green, and your picks preview live in the
 grid.
 
+## Progression & meta-game
+
+- **⭐ XP and levels** — every game earns XP (score on wins, a little on
+  losses); titles climb from *Word Novice* to *Grandmaster of Avoidance*.
+- **🏆 15 achievements** — from First Dodge to the legendary 👻 Ghost
+  (win revealing ≤8 clue tiles — simulation-tuned to ~1 in 20 sessions).
+  Trophy case in the sidebar shows what's still locked.
+- **🔥 Daily streaks** — consecutive daily wins per language & length,
+  flaunted on the banner.
+- **🎯 Daily side-quests** — one deterministic extra goal per day
+  ("win without a single undo", +XP), same for every player.
+- All progression travels with the stats backup file.
+
 ## Move analysis
 
 - **Live safety rating** after every guess: a grade (🟢 brilliant → 🔴
@@ -99,7 +112,7 @@ dontwordle/
   analysis.py   numpy-vectorized move-quality analyzer
   data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
-tests/          ~100 tests: engine, analysis, self-play, AppTest UI
+tests/          120+ tests: engine, analysis, meta-game, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
@@ -113,6 +126,28 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.7** — 🕑 session recap in the sidebar (last games with
+  outcome and score, practice replays included); share cards now carry
+  your level and trophy count for extra bragging rights.
+- **1.5.0.6** — the oracle got smart: 🛟 hints now suggest the safest
+  sampled word (keeps ~3.6× more words alive than a random safe word,
+  measured over 25 positions); 🔥 streak-at-risk nudge in the sidebar
+  when today's daily is still unplayed.
+- **1.5.0.5** — double deep-check hardening (3 review agents): hostile
+  backup files can no longer hang (unbounded XP → capped level math) or
+  crash the app (float infinities and 400-digit JSON integers now
+  rejected/clamped on every numeric field); daily XP/quests can't be
+  re-farmed through backup restore (daily_done travels in the file);
+  Polyglot/Triathlete progress survives restores; Houdini now requires
+  actually *facing* the trap; quest banner and award agree across
+  midnight; doc/desc accuracy pass. Plus docs/APP_STORE_GUIDE.md — the
+  honest iPhone App Store playbook.
+- **1.5.0.4** — engagement layer: XP & 10-title level ladder, 15
+  achievements with sidebar trophy case and unlock toasts, per-language
+  daily streaks with 🔥 banner, deterministic daily side-quests with XP
+  bonuses, near-death drama tracking (Houdini/Daredevil unlocks);
+  thresholds tuned via 40-session bot simulation; progression persists
+  through stats backup (backward-compatible format).
 - **1.5.0.3** — strategy intel: 🧨 endgame trap forecast (once ≤30 words
   remain, see how many of your playable words lead straight into a
   trap — hidden in Impossible, where you're on your own); 🗒️ Zen word

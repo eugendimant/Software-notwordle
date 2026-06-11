@@ -129,6 +129,10 @@ class DontWordleGame:
         # Stack of remaining playable pools, one entry per turn played,
         # so undo is O(1). Element 0 is the full dictionary.
         self._pools: list[list[str]] = [sorted(self.dictionary)]
+        # drama bookkeeping: the smallest pool ever reached this game
+        # (deliberately NOT reverted by undo — a near-death stays lived)
+        self.min_pool_seen = len(self._pools[0])
+        self._trap_faced = False  # player acted while only the secret remained
 
     # ------------------------------------------------------------------
     # State inspection
@@ -172,6 +176,13 @@ class DontWordleGame:
         return (self.status is GameStatus.PLAYING
                 and self._pools[-1] == [self.secret])
 
+    @property
+    def was_ever_trapped(self) -> bool:
+        """Did the player ever have to act while trapped? (A final winning
+        guess that merely collapses the pool to the secret doesn't count —
+        no trap was actually faced.)"""
+        return self._trap_faced
+
     def safe_words(self) -> list[str]:
         return [w for w in self._pools[-1] if w != self.secret]
 
@@ -200,6 +211,8 @@ class DontWordleGame:
     def submit(self, word: str) -> TurnRecord:
         if self.is_over:
             raise InvalidGuess("The game is over.")
+        if self.is_trapped:
+            self._trap_faced = True
         word = word.strip().lower()
         reason = self.validate(word)
         if reason:
@@ -210,6 +223,7 @@ class DontWordleGame:
         self._pools.append(
             [w for w in self._pools[-1] if is_consistent(w, word, feedback)]
         )
+        self.min_pool_seen = min(self.min_pool_seen, len(self._pools[-1]))
         if word == self.secret:
             self.status = GameStatus.WORDLED
         elif len(self.history) >= self.config.max_guesses:
@@ -225,20 +239,25 @@ class DontWordleGame:
         """Take back the latest guess (allowed even after losing)."""
         if not self.can_undo():
             return False
+        if self.is_trapped:
+            self._trap_faced = True  # undoing out of a trap = facing it
         self.history.pop()
         self._pools.pop()
         self.undos_used += 1
         self.status = GameStatus.PLAYING
         return True
 
-    def hint(self) -> str | None:
-        """Reveal a guaranteed-safe playable word (never the secret)."""
+    def hint(self, chooser=None) -> str | None:
+        """Reveal a guaranteed-safe playable word (never the secret).
+        ``chooser(safe_words, rng)`` may pick smartly; default is random."""
         if self.hints_left <= 0 or self.is_over:
             return None
         safe = self.safe_words()
         if not safe:
             return None
         self.hints_used += 1
+        if chooser is not None:
+            return chooser(safe, self.rng)
         return self.rng.choice(safe)
 
     def peek(self, k: int = 5) -> list[str]:

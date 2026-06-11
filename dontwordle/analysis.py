@@ -180,3 +180,18 @@ def rate_move(analyzer: Analyzer, played: str, pool_before: list[str],
 def analyzer_for(lang: str, length: int = 5) -> Analyzer:
     from . import words as W
     return Analyzer(W.allowed_guesses(lang, length))
+
+
+def best_safe_hint(analyzer: Analyzer, pool: list[str], secret: str,
+                   rng: random.Random, sample_size: int = 40,
+                   pool_cap: int = 8000) -> str | None:
+    """A *quality* hint: among sampled safe words, the one that keeps the
+    most words alive for the next row. Deterministic given ``rng``."""
+    safe = [w for w in pool if w != secret]
+    if not safe:
+        return None
+    candidates = (safe if len(safe) <= sample_size
+                  else rng.sample(safe, sample_size))
+    count_pool = pool if len(pool) <= pool_cap else rng.sample(pool, pool_cap)
+    retained = analyzer.retained_counts(candidates, count_pool, secret)
+    return candidates[int(np.argmax(retained))]
