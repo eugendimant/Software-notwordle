@@ -17,7 +17,7 @@ WORD_LENGTHS = (4, 5, 6)   # supported board sizes
 
 #: dictionary languages (the interface itself stays English)
 LANGUAGES = {
-    "en": "🇬🇧 English",
+    "en": "🇺🇸 English",
     "de": "🇩🇪 German",
     "es": "🇪🇸 Spanish",
     "ru": "🇷🇺 Russian",
