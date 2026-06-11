@@ -110,6 +110,7 @@ def init_state() -> None:
     ss.setdefault("daily_streaks", {})     # "lang:len" -> {last, streak}
     ss.setdefault("wins_langs", set())
     ss.setdefault("wins_lengths", set())
+    ss.setdefault("session_log", [])       # recap of finished games
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -138,6 +139,12 @@ def record_result_if_final(force: bool = False) -> None:
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
         return
     ss.recorded = True
+    # the session recap lists every finished game (even daily practice
+    # replays, which are excluded from stats/XP below)
+    ss.session_log = (ss.session_log + [{
+        "mode": ss.mode, "lang": ss.lang, "len": ss.word_len,
+        "won": game.status is GameStatus.SURVIVED,
+        "score": game.score()}])[-20:]
     if ss.mode == "daily":
         daily_key = ss.get("daily_key") or (
             f"{datetime.date.today().isoformat()}:{ss.lang}:{ss.word_len}")
@@ -983,6 +990,17 @@ def main() -> None:
                 "- Surviving with more 🟩/🟨 on the board scores higher."
             )
 
+        if ss.session_log:
+            wins = sum(e["won"] for e in ss.session_log)
+            with st.expander(f"🕑 This session ({wins}/"
+                             f"{len(ss.session_log)} survived)"):
+                label_of = {v: k for k, v in MODES.items()}
+                for e in reversed(ss.session_log[-8:]):
+                    icon = "✅" if e["won"] else "💀"
+                    st.caption(f"{icon} {label_of[e['mode']]} · "
+                               f"{e['lang']}·{e['len']} — "
+                               f"{e['score']} pts")
+
         n_unlocked = len(ss.achievements)
         with st.expander(f"🏆 Trophy case ({n_unlocked}/"
                          f"{len(ACH.ACHIEVEMENTS)})"):
@@ -1173,7 +1191,11 @@ def main() -> None:
                           type="primary")
         for note in ss.game_unlocks:
             st.success(note)
-        st.code(game.share_text(share_title()), language=None)
+        lv = ACH.level_for_xp(ss.xp)
+        share_block = (game.share_text(share_title())
+                       + f"\n⭐ Level {lv['level']} {lv['title']} · "
+                         f"🏆 {len(ss.achievements)}/{len(ACH.ACHIEVEMENTS)}")
+        st.code(share_block, language=None)
         st.caption("Copy the block above to share your result.")
 
         with st.expander("🔬 Best-move review", expanded=ss.review is not None):

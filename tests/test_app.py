@@ -608,6 +608,29 @@ def test_daily_streak_nudge_in_sidebar():
     assert "on the line" not in blob
 
 
+def test_session_log_and_share_card_meta():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    # share card now carries level + trophy count
+    blob = " ".join(str(el.value) for el in at.code)
+    assert "⭐ Level" in blob and "🏆" in blob
+    log = at.session_state["session_log"]
+    assert len(log) == 1 and log[0]["won"] and log[0]["mode"] == "daily"
+    # a loss is logged too
+    button(at, "🔁 Replay today's word").click()
+    at.run()
+    game = at.session_state["game"]
+    game.undos_used = game.config.max_undos
+    guess(at, game.secret)
+    log = at.session_state["session_log"]
+    assert len(log) == 2 and not log[1]["won"]
+    side = " ".join(str(md.value) for md in at.sidebar.caption)
+    assert "pts" in side  # recap rendered
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

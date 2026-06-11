@@ -126,6 +126,9 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.7** — 🕑 session recap in the sidebar (last games with
+  outcome and score, practice replays included); share cards now carry
+  your level and trophy count for extra bragging rights.
 - **1.5.0.6** — the oracle got smart: 🛟 hints now suggest the safest
   sampled word (keeps ~3.6× more words alive than a random safe word,
   measured over 25 positions); 🔥 streak-at-risk nudge in the sidebar
