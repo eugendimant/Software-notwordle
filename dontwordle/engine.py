@@ -247,14 +247,17 @@ class DontWordleGame:
         self.status = GameStatus.PLAYING
         return True
 
-    def hint(self) -> str | None:
-        """Reveal a guaranteed-safe playable word (never the secret)."""
+    def hint(self, chooser=None) -> str | None:
+        """Reveal a guaranteed-safe playable word (never the secret).
+        ``chooser(safe_words, rng)`` may pick smartly; default is random."""
         if self.hints_left <= 0 or self.is_over:
             return None
         safe = self.safe_words()
         if not safe:
             return None
         self.hints_used += 1
+        if chooser is not None:
+            return chooser(safe, self.rng)
         return self.rng.choice(safe)
 
     def peek(self, k: int = 5) -> list[str]:

@@ -126,6 +126,10 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.6** — the oracle got smart: 🛟 hints now suggest the safest
+  sampled word (keeps ~3.6× more words alive than a random safe word,
+  measured over 25 positions); 🔥 streak-at-risk nudge in the sidebar
+  when today's daily is still unplayed.
 - **1.5.0.5** — double deep-check hardening (3 review agents): hostile
   backup files can no longer hang (unbounded XP → capped level math) or
   crash the app (float infinities and 400-digit JSON integers now

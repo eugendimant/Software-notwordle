@@ -440,10 +440,17 @@ def act_hint() -> None:
     _ensure_state()
     ss = st.session_state
     _reseed_daily_rng("hint")
-    h = ss.game.hint()
+    game: DontWordleGame = ss.game
+    az = A.analyzer_for(ss.lang, game.word_length)
+
+    def smart(safe, rng):  # safest sampled word, not just any safe word
+        return A.best_safe_hint(az, game.remaining_words, game.secret, rng)
+
+    h = game.hint(chooser=smart)
     if h:
         ss.hint_word = h
-        ss.message = ("ok", "🛟 The oracle whispers a guaranteed-safe word.")
+        ss.message = ("ok", "🛟 The oracle whispers a *good* safe word — "
+                            "it keeps your options wide open.")
     else:
         ss.message = ("error", "No hint available.")
 
@@ -929,6 +936,17 @@ def main() -> None:
                  help="Changing mode starts a fresh game.")
         st.caption(MODE_HELP[ss.mode])
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
+        # retention nudge: today's daily for this combo is still unplayed
+        today_key = (f"{datetime.date.today().isoformat()}:"
+                     f"{ss.lang}:{ss.word_len}")
+        if ss.mode != "daily" and today_key not in ss.daily_done:
+            streak = ss.daily_streaks.get(
+                f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
+            if streak >= 1:
+                st.warning(f"🔥 Your {streak}-day daily streak is on the "
+                           "line — today's word is waiting!")
+            else:
+                st.caption("📅 Today's daily word is still waiting for you.")
 
         st.divider()
         st.subheader("📊 Your stats")

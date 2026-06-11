@@ -590,6 +590,24 @@ def test_derive_session_wins_from_stats():
     assert langs == {"de", "en"} and lengths == {5, 6}
 
 
+def test_daily_streak_nudge_in_sidebar():
+    import datetime
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎲 Classic").run()
+    at.session_state["daily_streaks"]["en:5"] = {
+        "last": (datetime.date.today()
+                 - datetime.timedelta(days=1)).isoformat(), "streak": 4}
+    at.run()
+    blob = " ".join(str(el.value) for el in at.sidebar.warning)
+    assert "4-day daily streak is on the line" in blob
+    # once today's daily is done, the nudge disappears
+    at.session_state["daily_done"].add(
+        f"{datetime.date.today().isoformat()}:en:5")
+    at.run()
+    blob = " ".join(str(el.value) for el in at.sidebar.warning)
+    assert "on the line" not in blob
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret
