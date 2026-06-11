@@ -94,7 +94,7 @@ def init_state() -> None:
     ss = st.session_state
     ss.setdefault("lang", "en")
     ss.setdefault("word_len", 5)
-    ss.setdefault("input_mode", "type")  # "type" | "click"
+    ss.setdefault("input_mode", "click")  # clickable keyboard by default
     ss.setdefault("kbd_buffer", "")      # letters picked on the clickable kbd
     ss.setdefault("ratings", [])       # live MoveRating per row
     ss.setdefault("review", None)      # post-game best-move analysis
@@ -583,6 +583,24 @@ TILE_COLORS = {GREEN: "#538d4e", YELLOW: "#b59f3b", GRAY: "#3a3a3c"}
 
 CSS = """
 <style>
+/* Windows ships no flag emojis (Chrome/Edge show bare country codes
+   like "GB DE"). This web font supplies ONLY the regional-indicator
+   codepoints (unicode-range), so every other character falls through
+   to the normal fonts — icons and text are unaffected. */
+@font-face {
+  font-family: "Twemoji Country Flags";
+  src: url("https://cdn.jsdelivr.net/npm/country-flag-emoji-polyfill@0.1.8/dist/TwemojiCountryFlags.woff2") format("woff2");
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067,
+                 U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
+  font-display: swap;
+}
+[data-baseweb="select"] div, [role="listbox"] li, [role="option"],
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
+[data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p,
+.dw-banner, .dw-footer, pre, code {
+  font-family: "Twemoji Country Flags", "Source Sans Pro", "Source Code Pro",
+               sans-serif;
+}
 .block-container {max-width: 720px;}
 .dw-header {text-align:center; margin:-12px 0 2px 0;}
 .dw-title {font-family:'Helvetica Neue',Arial,sans-serif; font-weight:900;
@@ -651,12 +669,15 @@ CSS = """
 }
 /* Clickable keyboard: Streamlit stacks columns vertically on phones,
    which exploded the keyboard into 26 full-width rows. Force each
-   keyboard row to stay a single horizontal flex line with compact,
-   evenly stretched keys at every viewport width. */
+   keyboard row to stay a single horizontal flex line — and keep the
+   whole keyboard compact and centered like a phone keyboard rather
+   than sprawling across the desktop page. */
+.st-key-clickkbd {max-width: 480px; margin: 0 auto;}
+.st-key-clickkbd [data-testid="stVerticalBlock"] {gap: 0.22rem !important;}
 .st-key-clickkbd [data-testid="stHorizontalBlock"] {
   flex-wrap: nowrap !important;
-  gap: 0.22rem !important;
-  margin-bottom: 0.22rem;
+  gap: 0.18rem !important;
+  margin-bottom: 0;
 }
 .st-key-clickkbd [data-testid="stColumn"] {
   min-width: 0 !important;
@@ -666,20 +687,23 @@ CSS = """
 .st-key-clickkbd .stButton > button {
   width: 100% !important;
   min-width: 0 !important;
-  height: 2.9rem;
+  height: 2.4rem;
+  min-height: 2.4rem;
   padding: 0 !important;
-  font-weight: 700;
-  font-size: 1rem;
+  font-weight: 600;
+  font-size: 0.95rem;
   border-radius: 6px;
   text-transform: uppercase;
 }
 @media (max-width: 480px) {
   .st-key-clickkbd .stButton > button {
-    height: 2.6rem;
+    height: 2.6rem;       /* thumb-sized on actual phones */
+    min-height: 2.6rem;
     font-size: 0.9rem;
   }
 }
-/* ability buttons: one compact row on phones instead of a tall stack */
+/* ability buttons: one compact centered row, not a tall stack */
+.st-key-abilities {max-width: 540px; margin: 0 auto;}
 .st-key-abilities [data-testid="stHorizontalBlock"] {
   flex-wrap: nowrap !important;
   gap: 0.25rem !important;
@@ -694,6 +718,7 @@ CSS = """
   padding: 0.25rem 0.1rem !important;
   font-size: 0.85rem;
   white-space: nowrap;
+  min-height: 2.2rem;
 }
 /* keep the guess box and its button side by side on phones too */
 .st-key-guessrow [data-testid="stHorizontalBlock"] {
@@ -932,8 +957,8 @@ def main() -> None:
                      on_change=act_change_len,
                      help="Word length: 4 = casual, 5 = classic, "
                           "6 = expert. Changing it starts a fresh game.")
-        st.radio("Input method", ["⌨️ Typing", "🔠 Clickable letters"],
-                 index=0 if ss.input_mode == "type" else 1,
+        st.radio("Input method", ["🔠 Clickable letters", "⌨️ Typing"],
+                 index=0 if ss.input_mode == "click" else 1,
                  key="input_select", on_change=act_change_input,
                  horizontal=True)
         labels = list(MODES)

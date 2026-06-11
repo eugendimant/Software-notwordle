@@ -54,7 +54,7 @@ peeks cost points. Copy-paste emoji share cards included.
 
 ## Languages & word lengths
 
-Play with 🇬🇧 English, 🇩🇪 German, 🇷🇺 Russian or 🇪🇸 Spanish dictionaries —
+Play with 🇺🇸 English, 🇩🇪 German, 🇷🇺 Russian or 🇪🇸 Spanish dictionaries —
 the interface stays English — and pick your board size: **4 letters
 (casual), 5 (classic) or 6 (expert)**. All twelve language×length
 combinations have their own curated dictionaries (filtered against
@@ -64,10 +64,10 @@ conventions (Russian ё→е, Spanish accents fold, ñ stays distinct).
 
 ## Input your way
 
-Type your guess (Enter submits) or flip the sidebar switch to a fully
-**clickable on-screen keyboard** — letters you've eliminated grey out
-and lock, known letters glow green, and your picks preview live in the
-grid.
+A compact, phone-style **clickable keyboard** is the default — letters
+you've eliminated grey out and lock, known letters glow green, and your
+picks preview live in the grid. Prefer typing? Flip the sidebar switch
+(Enter submits).
 
 ## Progression & meta-game
 
@@ -126,6 +126,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.8** — flags render everywhere: Windows ships no flag emojis
+  (browsers showed bare "GB DE" codes), so a Twemoji country-flag web
+  font now covers exactly the flag codepoints on every OS; 🇺🇸 American
+  English label; clickable keyboard is the default input (typing is the
+  toggle); keyboard restyled compact and centered like a phone keyboard
+  instead of sprawling across desktop.
 - **1.5.0.7** — 🕑 session recap in the sidebar (last games with
   outcome and score, practice replays included); share cards now carry
   your level and trophy count for extra bragging rights.
