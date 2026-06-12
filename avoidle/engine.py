@@ -134,6 +134,7 @@ class AvoidleGame:
         # (deliberately NOT reverted by undo — a near-death stays lived)
         self.min_pool_seen = len(self._pools[0])
         self._trap_faced = False  # player acted while only the secret remained
+        self.forfeited = False    # lost without a fatal guess (e.g. timer)
 
     # ------------------------------------------------------------------
     # State inspection
@@ -257,7 +258,15 @@ class AvoidleGame:
     def can_undo(self) -> bool:
         return (bool(self.history)
                 and self.undos_left > 0
+                and not self.forfeited
                 and self.status is not GameStatus.SURVIVED)
+
+    def forfeit(self) -> None:
+        """End the game as a loss without a fatal guess (out of time,
+        resignation). Not undoable — the clock doesn't run backward."""
+        if not self.is_over:
+            self.status = GameStatus.WORDLED
+            self.forfeited = True
 
     def undo(self) -> bool:
         """Take back the latest guess (allowed even after losing)."""
@@ -337,7 +346,9 @@ class AvoidleGame:
             score = self.score()
         if guesses is None:
             guesses = self.guesses_made
-        outcome = "I SURVIVED 🎉" if won else "I said the word 💀"
+        outcome = ("I SURVIVED 🎉" if won
+                   else "I ran out of time ⏰" if self.forfeited
+                   else "I said the word 💀")
         undo_word = "undo" if self.undos_used == 1 else "undos"
         lines = [f"{title} — {outcome}",
                  f"{guesses}/{self.config.max_guesses} guesses · "

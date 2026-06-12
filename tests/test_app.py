@@ -1151,3 +1151,151 @@ def test_version_and_homepage_in_sidebar():
     blob = rendered + sidebar_md
     assert __version__ in blob
     assert __homepage__ in blob
+
+
+# ----------------------------------------------------------------------
+# v1.5.2.0: turn timer, roulette mode, nickname slots, odometer
+# ----------------------------------------------------------------------
+def test_turn_timer_penalty_ladder_and_reset():
+    import time as _time
+    at = make_app()
+    at.toggle(key="timer_toggle").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["timer_on"] is True
+    assert at.session_state["turn_deadline"] is not None
+    # a play arriving past the deadline costs an ability (daily: the hint)
+    at.session_state["turn_deadline"] = _time.time() - 5
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.guesses_made == 1            # the late play still counts
+    assert game.config.max_hints == 0        # ...but the clock ate the hint
+    assert "clock ate" in at.session_state["message"][1]
+    assert at.session_state["turn_deadline"] > _time.time()  # clock restarted
+
+
+def test_turn_timer_locks_once_the_game_has_begun():
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    at.toggle(key="timer_toggle").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["timer_on"] is False   # change rejected
+
+
+def test_turn_timer_forfeits_with_nothing_left_to_take():
+    import time as _time
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    at.toggle(key="timer_toggle").set_value(True).run()
+    at.session_state["turn_deadline"] = _time.time() - 5
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over and game.forfeited
+    assert not app_module.player_won(game, "impossible")
+    assert at.session_state["stats"]["impossible:en:5"]["played"] == 1
+    assert at.session_state["stats"]["impossible:en:5"]["survived"] == 0
+
+
+def test_roulette_wheel_spins_and_keeps_the_game_fair():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.label == "Roulette"
+    game.rng = _random.Random(42)
+    for _ in range(4):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        if demanded:
+            safe = next((w for w in game.remaining_words
+                         if w != game.secret and demanded in w), None)
+        else:
+            safe = next((w for w in game.remaining_words
+                         if w != game.secret), None)
+        if safe is None:        # trapped or no word satisfies the demand
+            break
+        guess(at, safe)
+        game = at.session_state["game"]
+        # invariants the wheel must never break
+        assert game.secret in game.remaining_words
+        assert game.config.max_undos >= game.undos_used
+        assert game.config.max_hints >= game.hints_used
+        assert game.config.max_peeks >= game.peeks_used
+        if not game.is_over:
+            note = at.session_state["spin_note"]
+            assert note and note.startswith("🎰")
+
+
+def test_roulette_handcuff_blocks_words_without_the_letter():
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    at.session_state["spin_letter"] = "z"
+    safe = next(w for w in game.remaining_words
+                if w != game.secret and "z" not in w)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.guesses_made == 0
+    assert at.session_state["message"][0] == "error"
+    withz = next((w for w in game.remaining_words
+                  if w != game.secret and "z" in w), None)
+    if withz:
+        guess(at, withz)
+        assert at.session_state["game"].guesses_made == 1
+
+
+def test_nickname_slug_and_cookie_names():
+    import app as app_module
+    assert app_module._slug("Eugen! 23") == "eugen23"
+    assert app_module._slug("x" * 40) == "x" * 16
+    assert app_module.profile_cookie("") == "dw_progress"   # legacy guest
+    assert app_module.profile_cookie("Ben") == "dw_p_ben"
+
+
+def test_nickname_switch_starts_a_fresh_slot():
+    at = make_app()
+    at.session_state["xp"] = 750
+    at.session_state["games_total"] = 9
+    at.text_input(key="nick_input").input("Ben")
+    at.run()
+    assert not at.exception
+    assert at.session_state["nickname"] == "ben"
+    # no cookie exists for "ben" in the test harness -> fresh slot
+    assert at.session_state["xp"] == 0
+    assert at.session_state["games_total"] == 0
+
+
+def test_games_total_odometer_counts_and_survives_roundtrip():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)   # instant final loss
+    assert at.session_state["games_total"] == 1
+    # the odometer survives the backup-file roundtrip, clamped like
+    # every numeric field
+    payload = app_module.parse_stats_json(
+        '{"stats": {}, "games_total": 7}')
+    assert payload["games_total"] == 7
+
+
+def test_review_shows_safe_alternative_for_fatal_move():
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)
+    assert at.session_state["game"].is_over
+    btns = [b for b in at.button if b.label.startswith("Analyze")]
+    assert btns
+    btns[0].click()
+    at.run()
+    assert not at.exception
+    blob = " ".join(str(md.value) for md in at.markdown)
+    assert "safe instead" in blob

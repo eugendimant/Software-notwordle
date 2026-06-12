@@ -7,6 +7,7 @@ Run with:  streamlit run app.py
 from __future__ import annotations
 
 import base64
+import dataclasses
 import datetime
 import functools
 import json
@@ -26,7 +27,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.1.1"
+_EXPECTED_CORE_VERSION = "1.5.2.0"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -57,10 +58,12 @@ from avoidle.engine import (
 # Modes
 # ----------------------------------------------------------------------
 MODES = {
-    # ordered as a progression: the everyday puzzles, the no-pressure
-    # room, the solo difficulty ladder, the endless run, the showdown
+    # ordered as a progression: the everyday puzzles, the wildcard fun
+    # one, the no-pressure room, the solo difficulty ladder, the endless
+    # run, the showdown
     "📅 Daily Challenge": "daily",
     "🎲 Classic": "classic",
+    "🎰 Roulette": "roulette",
     "🧘 Zen": "zen",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
@@ -72,6 +75,7 @@ MODES = {
 MODE_BLURBS = {
     "daily": "One shared word a day — keep the streak",
     "classic": "Random word, standard rules",
+    "roulette": "Every guess spins the wheel — anything can happen",
     "zen": "No-pressure practice, unlimited help",
     "hard": "2 undos, no hints · 1.5× score",
     "impossible": "7 guesses, zero help · 2.5× score",
@@ -82,10 +86,21 @@ MODE_BLURBS = {
 DUEL_CONFIG = GameConfig("Duel", max_guesses=12, max_undos=0,
                          max_hints=0, max_peeks=1, score_multiplier=1.5)
 
+ROULETTE_CONFIG = GameConfig("Roulette", max_guesses=6, max_undos=2,
+                             max_hints=0, max_peeks=1,
+                             score_multiplier=1.25)
+
+#: the timer mode: seconds allowed per play, reset after every guess
+TURN_SECONDS = 180
+
 MODE_HELP = {
     "daily": "One shared puzzle per day — same secret word for everyone. "
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
+    "roulette": "After every guess the wheel spins a twist: bonus undos, "
+                "oracle clues, stolen abilities — the hidden word itself "
+                "may secretly change (the clues always stay true). "
+                "6 guesses, 2 undos, 1 peek. 1.25× score.",
     "duel": "Hot potato vs the bot: you alternate guesses — whoever says "
             "the hidden word LOSES. No undos, 1 peek. 12 rows, you go "
             "first. Pick the bot's strength below the mode selector.",
@@ -132,7 +147,6 @@ def _new_game(mode: str) -> AvoidleGame:
     lang, length = ss.lang, ss.word_len
     rng = random.Random()
     if mode == "daily":
-        import dataclasses
         today = datetime.date.today()
         secret = W.daily_secret(lang, length, today)
         cfg = dataclasses.replace(PRESETS["classic"], label="Daily")
@@ -146,6 +160,9 @@ def _new_game(mode: str) -> AvoidleGame:
         secret = W.random_secret(lang, length, rng)
     elif mode == "duel":
         cfg = DUEL_CONFIG
+        secret = W.random_secret(lang, length, rng)
+    elif mode == "roulette":
+        cfg = ROULETTE_CONFIG
         secret = W.random_secret(lang, length, rng)
     else:
         cfg = PRESETS[mode]
@@ -177,6 +194,14 @@ def init_state() -> None:
     ss.setdefault("bot_level", "normal")   # duel opponent strength
     ss.setdefault("bot_pending", False)    # duel: bot replies next rerun
     ss.setdefault("duel_read", None)       # recursive endgame debrief
+    ss.setdefault("nickname", "")          # active save slot ("" = guest)
+    ss.setdefault("games_total", 0)        # all-time finished games
+    ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
+    ss.setdefault("timer_on", False)       # 3-min-per-play countdown
+    ss.setdefault("turn_deadline", None)   # epoch seconds for this play
+    ss.setdefault("timer_strikes", 0)      # late plays this game
+    ss.setdefault("spin_note", None)       # roulette: last wheel result
+    ss.setdefault("spin_letter", None)     # roulette: forced letter
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -221,12 +246,19 @@ def reset_game_view_state() -> None:
     ss.game_unlocks = []
     ss.bot_pending = False
     ss.last_action = None
+    ss.spin_note = None
+    ss.spin_letter = None
+    ss.timer_strikes = 0
+    ss.turn_deadline = (time.time() + TURN_SECONDS
+                        if ss.get("timer_on") else None)
 
 
 def player_won(game: AvoidleGame, mode: str) -> bool:
     """Did the human win? In Duel the fatal guess may be the bot's."""
     if game.status is GameStatus.SURVIVED:
         return True
+    if getattr(game, "forfeited", False):
+        return False           # ran out of time — no parity tricks
     if mode == "duel" and game.status is GameStatus.WORDLED:
         # player rows are 0,2,4…; after the fatal row len(history) is
         # odd for a player blunder, even for a bot blunder
@@ -266,6 +298,9 @@ def record_result_if_final(force: bool = False) -> None:
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
         return
     ss.recorded = True
+    # the all-time odometer counts EVERY finished game (even practice
+    # replays) and only ever goes up — it is never reset
+    ss.games_total = min(ss.get("games_total", 0) + 1, NUM_CAP)
     # the session recap lists every finished game (even daily practice
     # replays, which are excluded from stats/XP below)
     ss.session_log = (ss.session_log + [{
@@ -468,6 +503,53 @@ def act_change_input() -> None:
 
 
 @_safe
+def act_change_nick() -> None:
+    """Switch save slots: bank the profile we're leaving (flushed to its
+    cookie at render end), then load — or start — the new nickname's."""
+    _ensure_state()
+    ss = st.session_state
+    new = _slug(ss.get("nick_input", ""))
+    old = ss.nickname
+    if new == old:
+        return
+    try:
+        token = st.context.cookies.get(profile_cookie(new))
+    except Exception:
+        # can't read the cookie jar right now: abort the switch rather
+        # than risk overwriting an existing slot with a blank one
+        ss.nick_input = old
+        ss.message = ("error", "Couldn't open that save slot — try again.")
+        return
+    ss.pending_cookie_saves[profile_cookie(old)] = encode_progress()
+    ss.nickname = new
+    shown = new or "guest"
+    payload = decode_progress(token) if token else None
+    if payload:
+        apply_progress(payload)
+        ss.message = ("ok", f"👤 Welcome back, **{shown}** — "
+                            "your progress is loaded.")
+    else:
+        reset_progress_state()
+        ss.message = ("ok", f"👤 New save slot for **{shown}** — wins and "
+                            "stats are kept under this name from now on.")
+    ss.stats_upload_token = None
+    ss.progress_dirty = True
+
+
+@_safe
+def act_toggle_timer() -> None:
+    _ensure_state()
+    ss = st.session_state
+    if ss.game.guesses_made > 0 and not ss.game.is_over:
+        ss.timer_toggle = ss.timer_on   # locked once the game has begun
+        return
+    ss.timer_on = bool(ss.get("timer_toggle"))
+    ss.timer_strikes = 0
+    ss.turn_deadline = (time.time() + TURN_SECONDS
+                        if ss.timer_on and not ss.game.is_over else None)
+
+
+@_safe
 def act_submit() -> None:
     _ensure_state()
     word = st.session_state.get("guess_input", "").strip().lower()
@@ -505,12 +587,110 @@ def act_accept_fate() -> None:
     _process_guess(st.session_state.game.secret)
 
 
+def _timer_overdue_penalty(game: AvoidleGame) -> str | None:
+    """The play arrived after the 3-minute deadline: strip one ability
+    (hint -> peek -> undo); with nothing left to take, the game is
+    forfeited. Returns the penalty text, or None if on time."""
+    ss = st.session_state
+    if (not ss.get("timer_on") or not ss.get("turn_deadline")
+            or game.is_over or time.time() <= ss.turn_deadline):
+        return None
+    ss.timer_strikes += 1
+    cfg = game.config
+    if cfg.max_hints > game.hints_used:
+        game.config = dataclasses.replace(cfg, max_hints=cfg.max_hints - 1)
+        return "⏰ Over 3 minutes — the clock ate a **hint**."
+    if cfg.max_peeks > game.peeks_used:
+        game.config = dataclasses.replace(cfg, max_peeks=cfg.max_peeks - 1)
+        return "⏰ Over 3 minutes — the clock ate a **peek**."
+    if cfg.max_undos > game.undos_used:
+        game.config = dataclasses.replace(cfg, max_undos=cfg.max_undos - 1)
+        return "⏰ Over 3 minutes — the clock ate an **undo**."
+    game.forfeit()
+    return None   # forfeit: the caller announces the loss itself
+
+
+#: roulette wheel: (weight, event id). Effects are applied by _spin_wheel.
+WHEEL = [
+    (2.0, "lucky_undo"),
+    (1.5, "gift_peek"),
+    (2.0, "oracle"),
+    (2.0, "imp_steal"),
+    (1.5, "shuffle"),
+    (1.5, "handcuff"),
+    (1.5, "nothing"),
+]
+
+
+def _spin_wheel(game: AvoidleGame) -> str:
+    """Roulette: after every surviving guess the wheel lands on a twist.
+    All effects keep the game fair — a re-rolled secret still matches
+    every clue on the board (it's drawn from the consistent pool)."""
+    ss = st.session_state
+    rng = game.rng
+    weights, events = zip(*WHEEL)
+    event = rng.choices(events, weights=weights, k=1)[0]
+    cfg = game.config
+    if event == "lucky_undo":
+        game.config = dataclasses.replace(cfg, max_undos=cfg.max_undos + 1)
+        return "🎰 → 🍀 Lucky spin: the wheel grants you an **extra undo**!"
+    if event == "gift_peek":
+        game.config = dataclasses.replace(cfg, max_peeks=cfg.max_peeks + 1)
+        return "🎰 → 🎁 Gift: the wheel grants you an **extra peek**!"
+    if event == "oracle":
+        known = set(letter_knowledge(game))
+        alphabet = {c for row in W.KEYBOARDS[ss.lang] for c in row}
+        fresh = sorted(alphabet - set(game.secret) - known)
+        if fresh:
+            ch = rng.choice(fresh)
+            return (f"🎰 → 🔮 Oracle: there is **no {ch.upper()}** "
+                    "in the hidden word.")
+        event = "nothing"
+    if event == "imp_steal":
+        if cfg.max_undos > game.undos_used:
+            game.config = dataclasses.replace(cfg,
+                                              max_undos=cfg.max_undos - 1)
+            return "🎰 → 😈 An imp steals one of your **undos**!"
+        event = "nothing"
+    if event == "shuffle":
+        game.secret = rng.choice(game.remaining_words)
+        return ("🎰 → 🌀 The wheel spun the **word itself** — every clue "
+                "still holds, but the word may have changed…")
+    if event == "handcuff":
+        donors = [w for w in game.remaining_words if w != game.secret]
+        if donors:
+            ch = rng.choice(sorted(set(rng.choice(donors))))
+            ss.spin_letter = ch
+            return (f"🎰 → 🔒 Wheel's demand: your next word must "
+                    f"contain **{ch.upper()}**.")
+        event = "nothing"
+    return "🎰 → 😌 The wheel lands on… nothing. Breathe."
+
+
 def _process_guess(word: str, clear_input: bool = False) -> None:
     ss = st.session_state
     game: AvoidleGame = ss.game
     if game.is_over:
         return
     word = W.normalize_guess(word, ss.lang)
+    # roulette handcuff: the wheel demanded a letter for this play
+    if (ss.mode == "roulette" and ss.get("spin_letter")
+            and ss.spin_letter not in word):
+        ss.message = ("error", f"🔒 The wheel demands a word with "
+                               f"**{ss.spin_letter.upper()}** in it.")
+        ss.last_action = "error"
+        return
+    # the turn timer judges the play by when it ARRIVES — but only a
+    # play that would actually count: a typo can never cost a penalty
+    penalty = None
+    if not game.validate(word):
+        penalty = _timer_overdue_penalty(game)
+        if game.is_over:           # ran out of abilities to strip: forfeit
+            ss.message = ("loss", "⏰ Out of time, nothing left to take — "
+                                  "the clock wins this one.")
+            ss.kbd_buffer = ""
+            record_result_if_final(force=True)
+            return
     try:
         turn = game.submit(word)
     except InvalidGuess as e:
@@ -543,6 +723,10 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     ss.ratings.append(rating)
     ss.hint_word = None
     ss.peek_words = None
+    ss.spin_letter = None          # any wheel demand was satisfied
+    ss.spin_note = None
+    if ss.get("timer_on"):         # the clock restarts with every play
+        ss.turn_deadline = time.time() + TURN_SECONDS
     if game.status is GameStatus.WORDLED:
         ss.message = ("loss", f"💀 You said it! “{word.upper()}” was the "
                               "hidden word." +
@@ -565,6 +749,11 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
         else:
             ss.message = ("ok", f"Revealed {greens} green / {yellows} yellow. "
                                 "Those clues now bind every future guess.")
+    if ss.mode == "roulette" and game.status is GameStatus.PLAYING:
+        ss.spin_note = _spin_wheel(game)
+    if penalty:                    # the late-play toll, appended visibly
+        kind, txt = ss.message if ss.message else ("warn", "")
+        ss.message = ("warn", f"{txt} {penalty}".strip())
     if game.is_over:
         ss.kbd_buffer = ""  # nothing left to type on a finished board
     record_result_if_final()
@@ -595,6 +784,8 @@ def _bot_reply() -> None:
         # one short line is enough
         ss.message = ("ok", f"👾 played “{bot_word.upper()}”. Your turn.")
     record_result_if_final()
+    if ss.get("timer_on") and not game.is_over:
+        ss.turn_deadline = time.time() + TURN_SECONDS  # your clock, not the bot's
 
 
 @_safe
@@ -716,7 +907,7 @@ def export_stats_json(compact: bool = False) -> str:
     ss = st.session_state
     payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
-               "xp": ss.xp,
+               "xp": ss.xp, "games_total": ss.get("games_total", 0),
                "achievements": sorted(ss.achievements),
                "daily_streaks": ss.daily_streaks,
                "daily_done": sorted(ss.daily_done),
@@ -742,7 +933,7 @@ def encode_progress() -> str:
     ss = st.session_state
     payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
-               "xp": ss.xp,
+               "xp": ss.xp, "games_total": ss.get("games_total", 0),
                "achievements": sorted(ss.achievements),
                "daily_streaks": ss.daily_streaks,
                "daily_done": _recent(ss.daily_done, 30),
@@ -766,12 +957,17 @@ def decode_progress(token: str) -> dict | None:
     return parse_stats_json(raw.decode("utf-8", errors="replace"))
 
 
-def apply_progress(payload: dict) -> None:
-    """Load a validated payload into the session (file or cookie)."""
+def apply_progress(payload: dict, merge_counter: bool = False) -> None:
+    """Load a validated payload into the session (file or cookie).
+    ``merge_counter`` keeps the all-time games odometer monotonic when
+    re-importing a backup (it must never go down)."""
     ss = st.session_state
     ss.stats = payload["stats"]
     ss.survival_best = payload["survival_best"]
     ss.xp = payload["xp"]
+    incoming = payload.get("games_total", 0)
+    ss.games_total = (max(ss.get("games_total", 0), incoming)
+                      if merge_counter else incoming)
     ss.achievements = payload["achievements"]
     ss.daily_streaks = payload["daily_streaks"]
     ss.daily_done = payload["daily_done"]
@@ -779,29 +975,66 @@ def apply_progress(payload: dict) -> None:
     ss.wins_langs, ss.wins_lengths = derive_session_wins(payload["stats"])
 
 
+def reset_progress_state() -> None:
+    """A brand-new save slot: all progress fields back to zero."""
+    ss = st.session_state
+    ss.stats = {}
+    ss.survival_best = 0
+    ss.xp = 0
+    ss.games_total = 0
+    ss.achievements = set()
+    ss.daily_streaks = {}
+    ss.daily_done = set()
+    ss.daily_win_dates = set()
+    ss.wins_langs, ss.wins_lengths = set(), set()
+
+
+def _slug(nick) -> str:
+    """Nicknames are save-slot keys: lowercase letters/digits, max 16."""
+    return re.sub(r"[^a-z0-9]", "", str(nick).lower())[:16]
+
+
+def profile_cookie(nick: str) -> str:
+    """Each nickname gets its own cookie; '' keeps the legacy name so
+    pre-nickname progress is the guest slot."""
+    s = _slug(nick)
+    return f"dw_p_{s}" if s else PROGRESS_COOKIE
+
+
 def save_progress_cookie() -> None:
-    """Persist progress in the browser (1-year cookie, ~0.5 KB).
-    Rendered as a zero-height component; runs once per change."""
+    """Persist progress in the browser (1-year cookies, ~0.5 KB per save
+    slot). Also flushes slots banked by a nickname switch and remembers
+    the active nickname, so a returning player resumes their own slot."""
+    ss = st.session_state
+    writes = {k: v for k, v in (ss.get("pending_cookie_saves") or {}).items()}
+    ss.pending_cookie_saves = {}
     token = encode_progress()
-    if len(token) > 3800:   # stay under the 4 KB cookie ceiling
-        return
+    writes[profile_cookie(ss.get("nickname", ""))] = token
+    js = "".join(
+        f"document.cookie = '{name}={tok}; "
+        "max-age=31536000; path=/; SameSite=Lax';"
+        for name, tok in writes.items()
+        if len(tok) <= 3800)   # stay under the 4 KB cookie ceiling
+    js += (f"document.cookie = '{NICK_COOKIE}="
+           f"{_slug(ss.get('nickname', ''))}; "
+           "max-age=31536000; path=/; SameSite=Lax';")
     try:
         # components.html is deprecated but its replacement (st.iframe)
         # cannot run inline scripts on the app origin; if a future
         # Streamlit removes it, persistence degrades gracefully instead
         # of crashing (the backup file always works).
-        components.html(
-            f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
-            "max-age=31536000; path=/; SameSite=Lax';</script>",
-            height=0)
+        components.html(f"<script>{js}</script>", height=0)
     except Exception:
         pass
 
 
 def restore_progress_from_cookie() -> bool:
-    """On a brand-new session, pull progress back from the cookie."""
+    """On a brand-new session, resume the last active save slot."""
     try:
-        token = st.context.cookies.get(PROGRESS_COOKIE)
+        cookies = st.context.cookies
+        nick = _slug(cookies.get(NICK_COOKIE, "") or "")
+        st.session_state.nickname = nick
+        token = cookies.get(profile_cookie(nick))
     except Exception:
         return False
     if not token:
@@ -814,6 +1047,7 @@ def restore_progress_from_cookie() -> bool:
 
 
 PROGRESS_COOKIE = "dw_progress"
+NICK_COOKIE = "dw_nick"
 
 NUM_CAP = 10**9  # ceiling for every numeric backup field
 
@@ -888,6 +1122,7 @@ def parse_stats_json(text: str) -> dict | None:
         return {"stats": clean,
                 "survival_best": _num(data.get("survival_best", 0)),
                 "xp": _num(data.get("xp", 0), ACH.XP_CAP),
+                "games_total": _num(data.get("games_total", 0)),
                 "achievements": achievements,
                 "daily_streaks": streaks,
                 "daily_done": done,
@@ -962,7 +1197,16 @@ pre, code {
   min-height: 1.6rem;
   border-radius: 999px;
   opacity: 0.85;
+  white-space: nowrap;   /* never break the chip text mid-word */
 }
+/* all-time odometer above the footer */
+.dw-odometer {text-align:center; font-size:0.8rem; opacity:0.8;
+              margin-bottom:6px;}
+.dw-odometer b {font-size:0.95rem;}
+/* roulette: the wheel's verdict slides in under the status line */
+.dw-spinline {animation: dw-spin-in .45s ease;}
+@keyframes dw-spin-in {from {opacity:0; transform:translateY(-5px);}
+                       to {opacity:1; transform:translateY(0);}}
 /* daily-wins heatmap: 4 weeks x 7 days */
 .dw-heat {display:grid; grid-template-columns:repeat(7, 14px); gap:3px;
           justify-content:center; margin:4px 0 2px 0;}
@@ -1470,13 +1714,33 @@ def main() -> None:
     st.markdown(HEADER, unsafe_allow_html=True)
 
     # ----- sidebar ----------------------------------------------------
+    # self-heal: every control must tell the truth about the ACTUAL game.
+    # A rolled-back switch or a dropped session can leave a widget
+    # showing a value the game never adopted (the "duel chrome over a
+    # daily board" bug) — resync widget state to the source of truth
+    # before the widgets are instantiated.
+    current = next(k for k, v in MODES.items() if v == ss.mode)
+    input_label = ("🔠 Clickable letters" if ss.input_mode == "click"
+                   else "⌨️ Typing")
+    for wkey, truth in (("mode_label", current), ("lang_select", ss.lang),
+                        ("len_select", ss.word_len),
+                        ("bot_select", ss.bot_level),
+                        ("input_select", input_label),
+                        ("timer_toggle", ss.timer_on),
+                        ("nick_input", ss.nickname)):
+        if wkey == "nick_input":
+            if _slug(ss.get(wkey, "")) != truth:
+                ss[wkey] = truth
+        elif ss.get(wkey, truth) != truth:
+            ss[wkey] = truth
     with st.sidebar:
         st.title("🚫 Avoidle")
         st.caption("Whatever you do — don't say the word.")
         lv = ACH.level_for_xp(ss.xp)
+        nick_tag = f" · 👤 {ss.nickname}" if ss.nickname else ""
         st.progress(lv["into"] / lv["needed"],
                     text=f"⭐ Level {lv['level']} · {lv['title']} · "
-                         f"{ss.xp:,} XP")
+                         f"{ss.xp:,} XP{nick_tag}")
         langs = list(W.LANGUAGES)
         c1, c2 = st.columns([3, 2])
         c1.selectbox("Language", langs,
@@ -1495,7 +1759,6 @@ def main() -> None:
                  key="input_select", on_change=act_change_input,
                  horizontal=True)
         labels = list(MODES)
-        current = next(k for k, v in MODES.items() if v == ss.mode)
         mode_help = "\n".join(
             f"- **{label}** — {MODE_BLURBS[m]}"
             for label, m in MODES.items()
@@ -1514,6 +1777,14 @@ def main() -> None:
                          help="Hard solves the endgame by backward "
                               "induction (it reasons several moves ahead); "
                               "tougher bots pay a bigger multiplier.")
+        st.toggle("⏱️ Turn timer — 3:00 per move", key="timer_toggle",
+                  on_change=act_toggle_timer,
+                  disabled=game.guesses_made > 0 and not game.is_over,
+                  help="Lock it in before your first word. Every play "
+                       "must land within 3 minutes (the clock restarts "
+                       "after each one). Run over and the clock eats a "
+                       "hint, then a peek, then an undo — with nothing "
+                       "left to take, you lose.")
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
         # retention nudge: today's daily for this combo is still unplayed
         today_key = (f"{datetime.date.today().isoformat()}:"
@@ -1527,6 +1798,13 @@ def main() -> None:
             else:
                 st.caption("📅 Today's daily word is still waiting for you.")
 
+        st.text_input("👤 Nickname (save slot)", key="nick_input",
+                      max_chars=16, placeholder="optional — keeps your scores",
+                      on_change=act_change_nick,
+                      help="Progress is saved in this browser per "
+                           "nickname. Type the same name next time to "
+                           "pick up your stats, XP and streaks exactly "
+                           "where you left them. Letters and digits only.")
         st.divider()
         st.subheader("📊 Your stats")
         stats = ss.stats.get(
@@ -1586,7 +1864,7 @@ def main() -> None:
                     ss.stats_upload_token = token  # import each file once
                     payload = parse_stats_json(content)
                     if payload:
-                        apply_progress(payload)
+                        apply_progress(payload, merge_counter=True)
                         ss.progress_dirty = True
                         st.success("Stats restored!")
                     else:
@@ -1595,6 +1873,13 @@ def main() -> None:
                     st.caption("✓ This backup is already loaded.")
 
         st.divider()
+        st.markdown(
+            f'<div class="dw-odometer">🎮 <b>{ss.games_total:,}</b> games '
+            'played all-time</div>', unsafe_allow_html=True)
+        st.link_button("💬 Suggest a feature",
+                       "mailto:edimant@sas.upenn.edu"
+                       "?subject=Avoidle%20feature%20idea",
+                       width="stretch")
         st.markdown(
             f'<div class="dw-footer">v{__version__} · built by '
             f'<a href="{__homepage__}" target="_blank">Dr. Eugen Dimant</a>'
@@ -1606,7 +1891,9 @@ def main() -> None:
     with st.container(key="rulesbar"):
         c_left, c_banner, c_rules = st.columns([1.4, 7.2, 1.4])
         with c_rules:
-            with st.popover("❓ Rules"):
+            # just the icon: the word "Rules" wrapped mid-word inside the
+            # narrow chip on phones ("Ru / les")
+            with st.popover("❓", help="How to play"):
                 st.markdown(HOW_TO_MD)
     # ----- header / survival banner (centered like everything else) ----
     if ss.mode == "survival":
@@ -1640,6 +1927,27 @@ def main() -> None:
                           unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
+    if ss.get("timer_on") and ss.get("turn_deadline") and not game.is_over:
+        # the countdown ticks client-side (no reruns); the server is the
+        # judge — it checks the clock when the play actually arrives
+        remaining_ms = int(max(0.0, ss.turn_deadline - time.time()) * 1000)
+        components.html(
+            '<div id="dwt" style="text-align:center;'
+            "font-family:'Source Sans','Source Sans Pro',sans-serif;"
+            'font-size:0.85rem;color:#b8b8b8;"></div>'
+            "<script>"
+            f"const end = Date.now() + {remaining_ms};"
+            "function dwTick() {"
+            "  const s = Math.max(0, Math.ceil((end - Date.now()) / 1000));"
+            "  const el = document.getElementById('dwt');"
+            "  el.textContent = '⏱️ ' + Math.floor(s / 60) + ':' +"
+            "    String(s % 60).padStart(2, '0') +"
+            "    (s === 0 ? ' — overtime! your next play costs you'"
+            "              : ' for this move');"
+            "  el.style.color = s <= 30 ? '#e74c3c' : '#b8b8b8';"
+            "}"
+            "dwTick(); setInterval(dwTick, 500);"
+            "</script>", height=24)
     buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
     st.markdown(render_board(game, buffer=buffer,
                              animate_last=ss.last_action == "guess",
@@ -1656,12 +1964,15 @@ def main() -> None:
                 and game.remaining_count <= MAX_SOLVE_POOL)
         if deep:
             verb = "solving the endgame"
-            delay = random.uniform(1.6, 2.4)
+            delay = random.uniform(3.2, 4.6)
+        elif random.random() < 0.2:    # the occasional snap reply
+            verb = "thinking"
+            delay = random.uniform(1.2, 1.9)
         else:
             verb = random.choice(["thinking", "weighing its options",
                                   "reading the board",
                                   "narrowing it down"])
-            delay = random.uniform(0.9, 1.7)
+            delay = random.uniform(2.2, 3.6)
         try:   # tests set pace to 0; a stray value must never crash
             delay = max(0.0, delay * float(ss.get("bot_pace", 1.0)))
         except (TypeError, ValueError):
@@ -1684,6 +1995,15 @@ def main() -> None:
         st.markdown(render_keyboard(game, ss.lang), unsafe_allow_html=True)
 
     show_message()
+    if ss.get("spin_note") and not game.is_over:
+        spin_html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>",
+                           str(ss.spin_note))
+        # slide in only on the rerun right after the guess — not on
+        # every keyboard click while the note stays up
+        cls = ("dw-status warn dw-spinline" if ss.last_action == "guess"
+               else "dw-status warn")
+        st.markdown(f'<div class="{cls}">{spin_html}</div>',
+                    unsafe_allow_html=True)
     if ss.ratings and not game.is_over and not ss.get("bot_pending"):
         r = ss.ratings[-1]
         approx = "~" if not r.exact else ""
@@ -1800,7 +2120,11 @@ def main() -> None:
                            f"× {bd['multiplier']:g} {game.config.label} "
                            f"bonus{floor_note}")
         else:
-            st.error(f"💀 **You said the word.** {_secret_reveal(game)}")
+            if getattr(game, "forfeited", False):
+                st.error(f"⏰ **The clock won this one.** "
+                         f"{_secret_reveal(game)}")
+            else:
+                st.error(f"💀 **You said the word.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
                 st.warning(f"⚔️ Run over at round {ss.survival_round}. "
                            f"Final run score: **{ss.survival_total}** · "
@@ -1839,6 +2163,10 @@ def main() -> None:
                         verdict = "**no way out — it was the only word left**"
                     elif r.fatal:
                         verdict = "**that was the hidden word**"
+                        if r.best_word != r.word:
+                            verdict += (f" — safe instead: "
+                                        f"**{r.best_word.upper()}** (kept "
+                                        f"{r.best_retained:,}){approx}")
                     elif r.word == r.best_word and r.pool_size > 1:
                         verdict = ("**perfect — nothing kept more**"
                                    if r.exact else

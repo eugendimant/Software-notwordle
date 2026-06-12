@@ -146,6 +146,20 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.2.0** — the wheel, the clock and the name: new **🎰 Roulette**
+  mode (after every guess the wheel spins a twist — bonus undos, oracle
+  clues, imp thefts, a forced letter, or the hidden word itself secretly
+  re-rolled among the words that still fit every clue); optional
+  **⏱️ turn timer** in every mode (3:00 per play, lock it in before the
+  first word — overruns cost a hint, then a peek, then an undo, then the
+  game, with a live client-side countdown); optional **👤 nicknames** as
+  save slots so several players can keep separate stats/XP/streaks in
+  one browser; an all-time **games-played odometer** that never resets;
+  a 💬 suggest-a-feature button; the duel bot now takes a properly
+  human 2–4½ s to "think"; the Rules chip no longer wraps mid-word on
+  phones; the best-move review names the safe alternative even on the
+  fatal row; and the mode selector can never again disagree with the
+  board (widget state self-heals to the actual game).
 - **1.5.1.1** — the verdict rail: every played row now shows its grade,
   kept-count and percentile in the space right of the tiles (phones keep
   the compact line under the keyboard); more breathing room between the
