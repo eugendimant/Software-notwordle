@@ -135,6 +135,15 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.18** — professional UX calm pass: one compact centered status
+  line under the keyboard replaces stacked full-width alert boxes (the
+  trapped state was being announced three times at once); move ratings
+  become a muted sub-line; ability and accept-fate buttons are
+  button-sized and centered instead of page-wide; quieter meter labels
+  and reserve note; duel banner slimmed. The duel bot now visibly
+  "thinks" — your tiles flip first, an animated 👾 thinking… beat plays
+  (~0.5s), then the bot's row lands with its own flip. Footer reads
+  "built by Dr. Eugen Dimant" (research site only).
 - **1.5.0.17** — front-page fit & compatibility round: title no longer
   clipped under Streamlit's toolbar; board, keyboard and abilities all
   fit one laptop screen (compact 44px tiles, tighter rhythm, slimmer

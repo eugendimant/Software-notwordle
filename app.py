@@ -11,7 +11,9 @@ import datetime
 import functools
 import json
 import random
+import re
 import sys
+import time
 import zlib
 
 import streamlit as st
@@ -24,7 +26,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.0.17"
+_EXPECTED_CORE_VERSION = "1.5.0.18"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -96,8 +98,6 @@ HOW_TO_MD = (
     "- More 🟩/🟨 on a winning board = higher score."
 )
 
-REPO_URL = "https://github.com/eugendimant/Software-notwordle"
-
 
 def survival_config(round_no: int) -> GameConfig:
     """Round 1 = 5 undos, each round one fewer; multiplier climbs 25%/round."""
@@ -162,6 +162,7 @@ def init_state() -> None:
     ss.setdefault("wins_lengths", set())
     ss.setdefault("session_log", [])       # recap of finished games
     ss.setdefault("bot_level", "normal")   # duel opponent strength
+    ss.setdefault("bot_pending", False)    # duel: bot replies next rerun
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -203,6 +204,7 @@ def reset_game_view_state() -> None:
     ss.review = None
     ss.kbd_buffer = ""
     ss.game_unlocks = []
+    ss.bot_pending = False
     ss.last_action = None
 
 
@@ -532,28 +534,13 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     elif game.status is GameStatus.SURVIVED:
         ss.message = ("win", "🎉 You SURVIVED! You never said the word.")
     elif ss.mode == "duel":
-        # the bot answers immediately — and may blunder into the secret
-        try:
-            bot_word = BOT.bot_pick(ss.bot_level, game.remaining_words,
-                                    ss.lang, game.word_length, game.rng)
-        except Exception:
-            bot_word = game.rng.choice(game.remaining_words)
-        game.submit(bot_word)
-        if game.status is GameStatus.WORDLED:
-            ss.message = ("win", f"👾 The bot said “{bot_word.upper()}” — "
-                                 "the hidden word. YOU WIN the duel!")
-        elif game.status is GameStatus.SURVIVED:
-            ss.message = ("win", "🏁 Twelve rows and nobody said it — "
-                                 "you outlasted the bot. You win!")
-        elif game.is_trapped:
-            ss.message = ("warn", f"👾 played “{bot_word.upper()}”. Only "
-                                  "the hidden word remains — your turn…")
-        else:
-            ss.message = ("ok", f"👾 played “{bot_word.upper()}”. "
-                                "Your turn.")
+        # the bot replies on the NEXT rerun, after a visible thinking
+        # beat — the player's tiles flip first, then the bot "decides"
+        ss.bot_pending = True
+        ss.message = None
     elif game.is_trapped:
-        ss.message = ("warn", "⚠️ TRAPPED — only the hidden word is left. "
-                              "Undo or face your fate!")
+        ss.message = ("warn", "Only the hidden word is left — undo, "
+                              "or face your fate.")
     else:
         greens = turn.feedback.count(GREEN)
         yellows = turn.feedback.count(YELLOW)
@@ -564,6 +551,33 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
                                 "Those clues now bind every future guess.")
     if game.is_over:
         ss.kbd_buffer = ""  # nothing left to type on a finished board
+    record_result_if_final()
+
+
+def _bot_reply() -> None:
+    """The duel bot's move, executed on the rerun after the player's
+    tiles have rendered. Sets the follow-up message."""
+    ss = st.session_state
+    game: AvoidleGame = ss.game
+    if game.is_over or ss.mode != "duel":
+        return
+    try:
+        bot_word = BOT.bot_pick(ss.bot_level, game.remaining_words,
+                                ss.lang, game.word_length, game.rng)
+    except Exception:
+        bot_word = game.rng.choice(game.remaining_words)
+    game.submit(bot_word)
+    ss.last_action = "guess"   # the bot's row gets its own flip
+    if game.status is GameStatus.WORDLED:
+        ss.message = ("win", f"👾 The bot said “{bot_word.upper()}” — "
+                             "the hidden word. YOU WIN the duel!")
+    elif game.status is GameStatus.SURVIVED:
+        ss.message = ("win", "🏁 Twelve rows and nobody said it — "
+                             "you outlasted the bot. You win!")
+    else:
+        # the meter and accept-fate button already explain a trap;
+        # one short line is enough
+        ss.message = ("ok", f"👾 played “{bot_word.upper()}”. Your turn.")
     record_result_if_final()
 
 
@@ -932,6 +946,26 @@ section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
 section[data-testid="stSidebar"] h1 {
   font-size: 1.45rem; padding-bottom: 0;
 }
+/* one calm status zone under the keyboard */
+.dw-status {max-width: 520px; margin: 6px auto 0 auto; padding: 5px 14px;
+            border-radius: 8px; font-size: 0.85rem; text-align: center;
+            border: 1px solid transparent;}
+.dw-status.ok    {background: rgba(120,130,140,0.10);
+                  border-color: rgba(120,130,140,0.25);}
+.dw-status.win   {background: rgba(83,141,78,0.14);
+                  border-color: rgba(83,141,78,0.40);}
+.dw-status.warn  {background: rgba(181,159,59,0.12);
+                  border-color: rgba(181,159,59,0.38);}
+.dw-status.error, .dw-status.loss
+                 {background: rgba(192,75,75,0.12);
+                  border-color: rgba(192,75,75,0.40);}
+.dw-substatus {text-align:center; font-size:0.73rem; opacity:0.55;
+               margin-top:3px;}
+.dw-think span {animation: dw-blink 1.2s infinite;}
+.dw-think span:nth-child(2) {animation-delay: .2s;}
+.dw-think span:nth-child(3) {animation-delay: .4s;}
+@keyframes dw-blink {0%,100% {opacity:0.15;} 50% {opacity:1;}}
+.st-key-fatebar {max-width: 420px; margin: 2px auto 0 auto;}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
   font-size: 0.88rem;
@@ -985,8 +1019,8 @@ section[data-testid="stSidebar"] h1 {
   100% {transform:rotateX(0deg); opacity:1;}
 }
 .dw-board.dw-shake {animation: dw-shake .4s ease;}
-.dw-more {font-size:0.7rem; opacity:0.5; letter-spacing:0.08em;
-          text-transform:uppercase; margin-top:2px;}
+.dw-more {font-size:0.68rem; opacity:0.38; letter-spacing:0.06em;
+          margin-top:2px;}
 .dw-row.dw-bot {position: relative; opacity: 0.92;}
 .dw-row.dw-bot::after {content: "👾"; position: absolute; right: -26px;
                        top: 50%; transform: translateY(-50%);
@@ -1005,7 +1039,7 @@ section[data-testid="stSidebar"] h1 {
          box-shadow:0 1.5px 0 rgba(0,0,0,0.4);}
 .dw-counts {display:flex; justify-content:center; gap:38px;
             text-align:center; font-weight:700; margin:0 0 2px 0;}
-.dw-counts .lab {font-size:0.66rem; letter-spacing:0.09em; opacity:0.7;
+.dw-counts .lab {font-size:0.62rem; letter-spacing:0.09em; opacity:0.55;
                  text-transform:uppercase;}
 .dw-counts .num {font-size:1.45rem; line-height:1.1;}
 .dw-bar {height:5px; border-radius:3px; background:#262628;
@@ -1072,9 +1106,10 @@ section[data-testid="stSidebar"] h1 {
   flex-wrap: nowrap !important;
   gap: 0.25rem !important;
 }
+.st-key-abilities [data-testid="stHorizontalBlock"] {justify-content:center;}
 .st-key-abilities [data-testid="stColumn"] {
   min-width: 0 !important;
-  flex: 1 1 0% !important;
+  flex: 0 1 170px !important;   /* lone buttons stay button-sized */
 }
 .st-key-abilities .stButton > button {
   width: 100% !important;
@@ -1246,6 +1281,8 @@ def render_streak_heatmap() -> str:
 
 
 def show_message() -> None:
+    """In-game feedback as one compact, centered line — full-width alert
+    boxes are reserved for the end-of-game panel."""
     msg = st.session_state.message
     if not msg:
         return
@@ -1253,8 +1290,11 @@ def show_message() -> None:
     # the end-of-game panel already announces wins/losses
     if st.session_state.game.is_over and kind in ("win", "loss"):
         return
-    {"error": st.error, "warn": st.warning, "win": st.success,
-     "loss": st.error, "ok": st.info}.get(kind, st.info)(text)
+    if kind not in ("ok", "warn", "error", "win", "loss"):
+        kind = "ok"
+    html = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", str(text))
+    st.markdown(f'<div class="dw-status {kind}">{html}</div>',
+                unsafe_allow_html=True)
 
 
 TRAP_FORECAST_LIMIT = 30
@@ -1453,7 +1493,7 @@ def main() -> None:
         st.divider()
         st.markdown(
             f'<div class="dw-footer">v{__version__} · built by '
-            f'<a href="{__homepage__}" target="_blank">Eugen Dimant</a>'
+            f'<a href="{__homepage__}" target="_blank">Dr. Eugen Dimant</a>'
             "</div>",
             unsafe_allow_html=True,
         )
@@ -1475,7 +1515,7 @@ def main() -> None:
         level_icon = BOT.BOT_LEVELS[ss.bot_level].split(" ")[0]
         c_banner.markdown(f'<div class="dw-banner">🆚 Duel vs {level_icon} '
                     f'{ss.bot_level.title()} <span class="sub">— whoever '
-                    f'says the word loses · your move</span></div>',
+                    f'says the word loses</span></div>',
                     unsafe_allow_html=True)
     elif ss.mode == "daily":
         streak = ss.daily_streaks.get(
@@ -1502,6 +1542,17 @@ def main() -> None:
                              shake=ss.last_action == "error",
                              duel=ss.mode == "duel"),
                 unsafe_allow_html=True)
+    if ss.get("bot_pending") and ss.mode == "duel" and not game.is_over:
+        # the player's row just rendered above; give the bot a visible
+        # moment to "think", then let it reply and rerun
+        st.markdown('<div class="dw-status ok dw-think">👾 thinking'
+                    '<span>.</span><span>.</span><span>.</span></div>',
+                    unsafe_allow_html=True)
+        time.sleep(0.55)
+        ss.bot_pending = False
+        _bot_reply()
+        st.rerun()
+
     if ss.input_mode == "click":
         if not game.is_over:
             render_click_keyboard(game, ss.lang)
@@ -1509,12 +1560,14 @@ def main() -> None:
         st.markdown(render_keyboard(game, ss.lang), unsafe_allow_html=True)
 
     show_message()
-    if ss.ratings and not game.is_over:
+    if ss.ratings and not game.is_over and not ss.get("bot_pending"):
         r = ss.ratings[-1]
-        st.caption(
-            f"Move {len(ss.ratings)} safety: **{r.grade}** — kept "
-            f"**{r.retained:,}** of {r.pool_size:,} words, outperformed "
-            f"{'~' if not r.exact else ''}{r.percentile:.0f}% of your options")
+        approx = "~" if not r.exact else ""
+        st.markdown(
+            f'<div class="dw-substatus">move {len(ss.ratings)}: {r.grade} · '
+            f'kept {r.retained:,} of {r.pool_size:,} · beat '
+            f'{approx}{r.percentile:.0f}% of options</div>',
+            unsafe_allow_html=True)
     # endgame intel: shown in modes that allow help (hard keeps its peek;
     # impossible players are on their own)
     if (not game.is_over
@@ -1592,10 +1645,12 @@ def main() -> None:
                                                  actions):
                     col.button(label, on_click=cb, disabled=off,
                                width="stretch")
-        if game.is_trapped and not game.can_undo():
-            st.button(f"⚰️ Accept fate — play “{game.secret.upper()}”",
-                      on_click=act_accept_fate, type="primary",
-                      width="stretch")
+        if (game.is_trapped and not game.can_undo()
+                and not ss.get("bot_pending")):
+            with st.container(key="fatebar"):
+                st.button(f"⚰️ Accept fate — play “{game.secret.upper()}”",
+                          on_click=act_accept_fate, type="primary",
+                          width="stretch")
     else:
         # ----- end of game panel ---------------------------------------
         won = player_won(game, ss.mode)
@@ -1686,8 +1741,8 @@ def main() -> None:
     # footer on the page itself — the sidebar is collapsed on phones
     st.markdown(
         f'<div class="dw-footer">v{__version__} · built by '
-        f'<a href="{__homepage__}" target="_blank">Eugen Dimant</a> · '
-        f'<a href="{REPO_URL}" target="_blank">GitHub</a></div>',
+        f'<a href="{__homepage__}" target="_blank">Dr. Eugen Dimant</a>'
+        '</div>',
         unsafe_allow_html=True)
 
     if ss.get("progress_dirty"):
