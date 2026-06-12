@@ -649,6 +649,98 @@ def test_session_log_and_share_card_meta():
     assert "pts" in side  # recap rendered
 
 
+def test_progress_cookie_roundtrip():
+    import app as app_module
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["xp"] > 0
+    # encode within the live session, decode outside it
+    at.session_state["_token"] = None
+    # exercise the codec directly on an export-shaped payload
+    exported = (
+        '{"stats": {"daily:en:5": {"played": 1, "survived": 1, "streak": 1,'
+        ' "best_streak": 1, "best_score": 373}}, "survival_best": 0,'
+        ' "xp": 473, "achievements": ["first_win"],'
+        ' "daily_streaks": {"en:5": {"last": "2026-06-12", "streak": 1}},'
+        ' "daily_done": ["2026-06-12:en:5"],'
+        ' "daily_win_dates": ["2026-06-12:en:5"]}')
+    import base64
+    import zlib
+    token = base64.urlsafe_b64encode(
+        zlib.compress(exported.encode())).decode()
+    payload = app_module.decode_progress(token)
+    assert payload["xp"] == 473
+    assert payload["achievements"] == {"first_win"}
+    assert payload["daily_win_dates"] == {"2026-06-12:en:5"}
+    # tampered tokens are rejected, never raise
+    assert app_module.decode_progress("not-a-token!!") is None
+    assert app_module.decode_progress(token[:-10]) is None
+
+
+def test_duel_mode_full_flow():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.label == "Duel"
+    assert game.config.max_undos == 0 and game.config.max_guesses == 12
+    game.secret = "crane"
+    game.rng = _random.Random(7)  # deterministic bot
+    safe = next(w for w in game.remaining_words if w != "crane")
+    guess(at, safe)
+    game = at.session_state["game"]
+    if not game.is_over:
+        # the bot answered: two rows on the board after one player move
+        assert game.guesses_made == 2
+        # exactly one live rating (the player's move only)
+        assert len(at.session_state["ratings"]) == 1
+    # play on until the duel ends
+    for _ in range(8):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        safe = next((w for w in game.remaining_words if w != game.secret),
+                    game.secret)
+        guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over
+    import app as app_module
+    won = app_module.player_won(game, "duel")
+    stats = at.session_state["stats"]["duel:en:5"]
+    assert stats["played"] == 1
+    assert stats["survived"] == (1 if won else 0)
+    if won and game.status is GameStatus.WORDLED:
+        # bot blunder win: fatal row count is even, score comes from app
+        assert len(game.history) % 2 == 0
+        assert stats["best_score"] == app_module.duel_score(game)
+
+
+def test_duel_player_blunder_is_a_loss():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    game = at.session_state["game"]
+    guess(at, game.secret)  # player says the word -> instant loss
+    game = at.session_state["game"]
+    assert game.status is GameStatus.WORDLED
+    assert not app_module.player_won(game, "duel")
+    assert at.session_state["stats"]["duel:en:5"]["survived"] == 0
+
+
+def test_streak_heatmap_renders_wins():
+    import datetime
+    at = make_app()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_win_dates"].add(f"{today}:en:5")
+    at.run()
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "dw-heat" in blob and 'class="win today"' in blob
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

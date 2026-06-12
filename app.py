@@ -6,11 +6,14 @@ Run with:  streamlit run app.py
 
 from __future__ import annotations
 
+import base64
 import datetime
 import json
 import random
+import zlib
 
 import streamlit as st
+import streamlit.components.v1 as components
 
 from dontwordle import __homepage__, __version__
 from dontwordle import achievements as ACH
@@ -34,16 +37,22 @@ from dontwordle.engine import (
 MODES = {
     "📅 Daily Challenge": "daily",
     "🎲 Classic": "classic",
+    "🤖 Duel": "duel",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
     "⚔️ Survival": "survival",
     "🧘 Zen": "zen",
 }
 
+DUEL_CONFIG = GameConfig("Duel", max_guesses=12, max_undos=0,
+                         max_hints=0, max_peeks=1, score_multiplier=1.5)
+
 MODE_HELP = {
     "daily": "One shared puzzle per day — same secret word for everyone. "
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
+    "duel": "Hot potato vs the bot: you alternate guesses — whoever says "
+            "the hidden word LOSES. No undos. 12 rows, you go first.",
     "hard": "6 guesses, only 2 undos, no hints, 1 peek. 1.5× score.",
     "impossible": "SEVEN guesses to survive, zero undos, zero help. 2.5× score.",
     "survival": "Endless gauntlet: each round you lose one undo. "
@@ -100,6 +109,9 @@ def _new_game(mode: str) -> DontWordleGame:
     elif mode == "survival":
         cfg = survival_config(ss.survival_round)
         secret = W.random_secret(lang, length, rng)
+    elif mode == "duel":
+        cfg = DUEL_CONFIG
+        secret = W.random_secret(lang, length, rng)
     else:
         cfg = PRESETS[mode]
         secret = W.random_secret(lang, length, rng)
@@ -133,8 +145,38 @@ def init_state() -> None:
     ss.setdefault("recorded", False)
     ss.setdefault("celebrated", False)
     ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang:len"} counted
+    ss.setdefault("daily_win_dates", set())  # daily WINS, for the heatmap
+    if not ss.get("_cookie_checked"):
+        ss._cookie_checked = True
+        if not ss.stats and ss.xp == 0:   # only a truly fresh session
+            restore_progress_from_cookie()
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
+
+
+def player_won(game: DontWordleGame, mode: str) -> bool:
+    """Did the human win? In Duel the fatal guess may be the bot's."""
+    if game.status is GameStatus.SURVIVED:
+        return True
+    if mode == "duel" and game.status is GameStatus.WORDLED:
+        # player rows are 0,2,4…; after the fatal row len(history) is
+        # odd for a player blunder, even for a bot blunder
+        return len(game.history) % 2 == 0
+    return False
+
+
+def duel_score(game: DontWordleGame) -> int:
+    """Score for a duel won by the bot's blunder (engine score is 0
+    because the game technically ended WORDLED)."""
+    return round((100 + 12 * game.guesses_made)
+                 * DUEL_CONFIG.score_multiplier)
+
+
+def game_score(game: DontWordleGame, mode: str) -> int:
+    if (mode == "duel" and player_won(game, mode)
+            and game.status is GameStatus.WORDLED):
+        return duel_score(game)
+    return game.score()
 
 
 def mode_stats(mode: str) -> dict:
@@ -159,8 +201,8 @@ def record_result_if_final(force: bool = False) -> None:
     # replays, which are excluded from stats/XP below)
     ss.session_log = (ss.session_log + [{
         "mode": ss.mode, "lang": ss.lang, "len": ss.word_len,
-        "won": game.status is GameStatus.SURVIVED,
-        "score": game.score()}])[-20:]
+        "won": player_won(game, ss.mode),
+        "score": game_score(game, ss.mode)}])[-20:]
     if ss.mode == "daily":
         daily_key = ss.get("daily_key") or (
             f"{datetime.date.today().isoformat()}:{ss.lang}:{ss.word_len}")
@@ -170,11 +212,12 @@ def record_result_if_final(force: bool = False) -> None:
     ss.stats_upload_token = None  # stats changed; allow re-restoring a backup
     stats = mode_stats(ss.mode)
     stats["played"] += 1
-    if game.status is GameStatus.SURVIVED:
+    if player_won(game, ss.mode):
         stats["survived"] += 1
         stats["streak"] += 1
         stats["best_streak"] = max(stats["best_streak"], stats["streak"])
-        stats["best_score"] = max(stats["best_score"], game.score())
+        stats["best_score"] = max(stats["best_score"],
+                                  game_score(game, ss.mode))
     else:
         stats["streak"] = 0
     if ss.mode == "survival":
@@ -184,11 +227,12 @@ def record_result_if_final(force: bool = False) -> None:
         else:
             ss.survival_best = max(ss.survival_best, ss.survival_total)
     _award_progress(game, stats)
+    ss.progress_dirty = True
 
 
 def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
     ss = st.session_state
-    won = game.status is GameStatus.SURVIVED
+    won = player_won(game, ss.mode)
     if won:
         ss.wins_langs.add(ss.lang)
         ss.wins_lengths.add(ss.word_len)
@@ -196,7 +240,7 @@ def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
     yellows = sum(t.feedback.count(YELLOW) for t in game.history)
     return ACH.GameContext(
         mode=ss.mode, lang=ss.lang, length=ss.word_len,
-        won=won, score=game.score(),
+        won=won, score=game_score(game, ss.mode),
         undos=game.undos_used, hints=game.hints_used, peeks=game.peeks_used,
         greens=greens, yellows=yellows,
         min_pool_seen=game.min_pool_seen, final_pool=game.remaining_count,
@@ -224,6 +268,7 @@ def _award_progress(game: DontWordleGame, stats: dict) -> None:
             quest_bonus = quest.xp
             ss.game_unlocks.append(
                 f"🎯 Side-quest complete: {quest.label} (+{quest.xp} XP)")
+        ss.daily_win_dates.add(f"{date_iso}:{ss.lang}:{ss.word_len}")
         # daily streak: consecutive calendar days per language+length
         skey = f"{ss.lang}:{ss.word_len}"
         entry = ss.daily_streaks.get(skey, {"last": "", "streak": 0})
@@ -370,7 +415,8 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     ss.last_action = "guess"
     if clear_input:
         ss.guess_input = ""
-    # rate the move: how well did it preserve the pool vs alternatives?
+    # rate the player's move against the pool it was chosen from —
+    # BEFORE any bot reply changes the board
     # (same seed/sample as act_review so live and review grades agree)
     row = game.guesses_made - 1
     ss.ratings.append(A.rate_move(
@@ -380,14 +426,28 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
         actual_retained=game.remaining_count))
     ss.hint_word = None
     ss.peek_words = None
-    if game.is_over:
-        ss.kbd_buffer = ""  # nothing left to type on a finished board
     if game.status is GameStatus.WORDLED:
         ss.message = ("loss", f"💀 You Wordled! “{word.upper()}” was the "
                               "hidden word." +
                       (" You can still UNDO it…" if game.can_undo() else ""))
     elif game.status is GameStatus.SURVIVED:
         ss.message = ("win", "🎉 You SURVIVED! You never said the word.")
+    elif ss.mode == "duel":
+        # the bot answers immediately — and may blunder into the secret
+        bot_word = game.rng.choice(game.remaining_words)
+        game.submit(bot_word)
+        if game.status is GameStatus.WORDLED:
+            ss.message = ("win", f"🤖 The bot said “{bot_word.upper()}” — "
+                                 "the hidden word. YOU WIN the duel!")
+        elif game.status is GameStatus.SURVIVED:
+            ss.message = ("win", "🤝 Twelve rows and nobody said it — "
+                                 "you outlasted the bot. You win!")
+        elif game.is_trapped:
+            ss.message = ("warn", f"🤖 played “{bot_word.upper()}”. Only "
+                                  "the hidden word remains — your turn…")
+        else:
+            ss.message = ("ok", f"🤖 played “{bot_word.upper()}”. "
+                                "Your turn.")
     elif game.is_trapped:
         ss.message = ("warn", "⚠️ TRAPPED — only the hidden word is left. "
                               "Undo or face your fate!")
@@ -399,6 +459,8 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
         else:
             ss.message = ("ok", f"Revealed {greens} green / {yellows} yellow. "
                                 "Those clues now bind every future guess.")
+    if game.is_over:
+        ss.kbd_buffer = ""  # nothing left to type on a finished board
     record_result_if_final()
 
 
@@ -497,16 +559,79 @@ def act_peek() -> None:
 STAT_KEYS = ("played", "survived", "streak", "best_streak", "best_score")
 
 
-def export_stats_json() -> str:
+def export_stats_json(compact: bool = False) -> str:
     ss = st.session_state
-    return json.dumps({"app": "dontwordle", "version": __version__,
-                       "stats": ss.stats, "survival_best": ss.survival_best,
-                       "xp": ss.xp,
-                       "achievements": sorted(ss.achievements),
-                       "daily_streaks": ss.daily_streaks,
-                       "daily_done": sorted(ss.daily_done)},
-                      indent=2)
+    payload = {"app": "dontwordle", "version": __version__,
+               "stats": ss.stats, "survival_best": ss.survival_best,
+               "xp": ss.xp,
+               "achievements": sorted(ss.achievements),
+               "daily_streaks": ss.daily_streaks,
+               "daily_done": sorted(ss.daily_done),
+               "daily_win_dates": sorted(ss.daily_win_dates)}
+    if compact:
+        return json.dumps(payload, separators=(",", ":"))
+    return json.dumps(payload, indent=2)
 
+
+def encode_progress() -> str:
+    """Progress as a cookie-safe token (zlib + url-safe base64)."""
+    raw = export_stats_json(compact=True).encode()
+    return base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode()
+
+
+def decode_progress(token: str) -> dict | None:
+    """Token -> validated payload (None on any tampering/corruption)."""
+    try:
+        raw = zlib.decompress(base64.urlsafe_b64decode(token.encode()),
+                              bufsize=1 << 16)
+        if len(raw) > 1 << 20:
+            return None
+    except Exception:
+        return None
+    return parse_stats_json(raw.decode("utf-8", errors="replace"))
+
+
+def apply_progress(payload: dict) -> None:
+    """Load a validated payload into the session (file or cookie)."""
+    ss = st.session_state
+    ss.stats = payload["stats"]
+    ss.survival_best = payload["survival_best"]
+    ss.xp = payload["xp"]
+    ss.achievements = payload["achievements"]
+    ss.daily_streaks = payload["daily_streaks"]
+    ss.daily_done = payload["daily_done"]
+    ss.daily_win_dates = payload["daily_win_dates"]
+    ss.wins_langs, ss.wins_lengths = derive_session_wins(payload["stats"])
+
+
+def save_progress_cookie() -> None:
+    """Persist progress in the browser (1-year cookie, ~0.5 KB).
+    Rendered as a zero-height component; runs once per change."""
+    token = encode_progress()
+    if len(token) > 3800:   # stay under the 4 KB cookie ceiling
+        return
+    components.html(
+        f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
+        "max-age=31536000; path=/; SameSite=Lax';</script>",
+        height=0)
+
+
+def restore_progress_from_cookie() -> bool:
+    """On a brand-new session, pull progress back from the cookie."""
+    try:
+        token = st.context.cookies.get(PROGRESS_COOKIE)
+    except Exception:
+        return False
+    if not token:
+        return False
+    payload = decode_progress(token)
+    if not payload:
+        return False
+    apply_progress(payload)
+    return True
+
+
+PROGRESS_COOKIE = "dw_progress"
 
 NUM_CAP = 10**9  # ceiling for every numeric backup field
 
@@ -566,12 +691,25 @@ def parse_stats_json(text: str) -> dict | None:
             if (lang in W.LANGUAGES and length.isdigit()
                     and int(length) in W.WORD_LENGTHS and len(done) < 5000):
                 done.add(f"{date_s}:{lang}:{int(length)}")
+        win_dates = set()
+        for key in data.get("daily_win_dates", []):
+            date_s, _, rest = str(key).partition(":")
+            lang, _, length = rest.partition(":")
+            try:
+                datetime.date.fromisoformat(date_s)
+            except ValueError:
+                continue
+            if (lang in W.LANGUAGES and length.isdigit()
+                    and int(length) in W.WORD_LENGTHS
+                    and len(win_dates) < 5000):
+                win_dates.add(f"{date_s}:{lang}:{int(length)}")
         return {"stats": clean,
                 "survival_best": _num(data.get("survival_best", 0)),
                 "xp": _num(data.get("xp", 0), ACH.XP_CAP),
                 "achievements": achievements,
                 "daily_streaks": streaks,
-                "daily_done": done}
+                "daily_done": done,
+                "daily_win_dates": win_dates}
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError):
         return None
 
@@ -627,6 +765,15 @@ CSS = """
   border-radius: 999px;
   opacity: 0.85;
 }
+/* daily-wins heatmap: 4 weeks x 7 days */
+.dw-heat {display:grid; grid-template-columns:repeat(7, 14px); gap:3px;
+          justify-content:center; margin:4px 0 2px 0;}
+.dw-heat div {width:14px; height:14px; border-radius:3px;
+              background:#262628;}
+.dw-heat .win {background:#538d4e;}
+.dw-heat .today {outline:1.5px solid #b59f3b;}
+.dw-heat-lab {text-align:center; font-size:0.72rem; opacity:0.7;
+              letter-spacing:0.08em; text-transform:uppercase;}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
   font-size: 0.88rem;
@@ -665,6 +812,10 @@ CSS = """
   100% {transform:rotateX(0deg); opacity:1;}
 }
 .dw-board.dw-shake {animation: dw-shake .4s ease;}
+.dw-row.dw-bot {position: relative; opacity: 0.92;}
+.dw-row.dw-bot::after {content: "🤖"; position: absolute; right: -26px;
+                       top: 50%; transform: translateY(-50%);
+                       font-size: 0.85rem;}
 @keyframes dw-shake {
   20% {transform:translateX(-7px);} 40% {transform:translateX(7px);}
   60% {transform:translateX(-4px);} 80% {transform:translateX(4px);}
@@ -780,7 +931,8 @@ HEADER = """
 
 
 def render_board(game: DontWordleGame, buffer: str = "",
-                 animate_last: bool = False, shake: bool = False) -> str:
+                 animate_last: bool = False, shake: bool = False,
+                 duel: bool = False) -> str:
     rows = []
     last = len(game.history) - 1
     width = game.word_length
@@ -790,6 +942,8 @@ def render_board(game: DontWordleGame, buffer: str = "",
             for l, c in zip(turn.guess, turn.feedback)
         )
         cls = "dw-row dw-reveal" if (animate_last and i == last) else "dw-row"
+        if duel and i % 2 == 1:
+            cls += " dw-bot"
         rows.append(f'<div class="{cls}">{tiles}</div>')
     for j in range(game.guesses_left):
         cells = []
@@ -886,6 +1040,24 @@ def render_click_keyboard(game: DontWordleGame, lang: str) -> None:
             if extras:
                 cols[-1].button("⌫", key="kbd_back", on_click=act_backspace,
                                 width="stretch", disabled=game.is_over)
+
+
+def render_streak_heatmap() -> str:
+    """GitHub-style 28-day calendar of daily wins for the current
+    language & length — the streak you don't want to break."""
+    ss = st.session_state
+    today = datetime.date.today()
+    cells = []
+    for offset in range(27, -1, -1):
+        day = today - datetime.timedelta(days=offset)
+        key = f"{day.isoformat()}:{ss.lang}:{ss.word_len}"
+        cls = "win" if key in ss.daily_win_dates else ""
+        if day == today:
+            cls += " today"
+        cells.append(f'<div class="{cls.strip()}" title="{day}"></div>')
+    wins = sum("win" in c for c in cells)
+    return (f'<div class="dw-heat-lab">daily wins · last 4 weeks '
+            f'({wins}/28)</div><div class="dw-heat">{"".join(cells)}</div>')
 
 
 def show_message() -> None:
@@ -1031,6 +1203,7 @@ def main() -> None:
         c2.metric("Survival %", f"{rate:.0f}%")
         c1.metric("Streak", stats["streak"])
         c2.metric("Best score", stats["best_score"])
+        st.markdown(render_streak_heatmap(), unsafe_allow_html=True)
         if ss.mode == "survival":
             st.metric("Best survival run", ss.survival_best)
 
@@ -1074,16 +1247,8 @@ def main() -> None:
                     ss.stats_upload_token = token  # import each file once
                     payload = parse_stats_json(content)
                     if payload:
-                        ss.stats = payload["stats"]
-                        ss.survival_best = payload["survival_best"]
-                        ss.xp = payload["xp"]
-                        ss.achievements = payload["achievements"]
-                        ss.daily_streaks = payload["daily_streaks"]
-                        ss.daily_done = payload["daily_done"]
-                        # rebuild session win sets so Polyglot/Triathlete
-                        # progress survives the restore
-                        ss.wins_langs, ss.wins_lengths = \
-                            derive_session_wins(payload["stats"])
+                        apply_progress(payload)
+                        ss.progress_dirty = True
                         st.success("Stats restored!")
                     else:
                         st.error("That doesn't look like a stats file.")
@@ -1105,6 +1270,12 @@ def main() -> None:
             f'run score {ss.survival_total} <span class="sub">· '
             f'{game.config.max_undos} undo(s) this round</span></div>',
             unsafe_allow_html=True)
+    elif ss.mode == "duel" and not game.is_over:
+        turn_txt = "your move" if game.guesses_made % 2 == 0 \
+            else "bot is thinking…"
+        st.markdown(f'<div class="dw-banner">🤖 Duel '
+                    f'<span class="sub">— whoever says the word loses · '
+                    f'{turn_txt}</span></div>', unsafe_allow_html=True)
     elif ss.mode == "daily":
         streak = ss.daily_streaks.get(
             f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
@@ -1127,7 +1298,8 @@ def main() -> None:
     buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
     st.markdown(render_board(game, buffer=buffer,
                              animate_last=ss.last_action == "guess",
-                             shake=ss.last_action == "error"),
+                             shake=ss.last_action == "error",
+                             duel=ss.mode == "duel"),
                 unsafe_allow_html=True)
     if ss.input_mode == "click":
         if not game.is_over:
@@ -1212,20 +1384,26 @@ def main() -> None:
                       width="stretch")
     else:
         # ----- end of game panel ---------------------------------------
-        if game.status is GameStatus.SURVIVED:
+        won = player_won(game, ss.mode)
+        if won:
             if not ss.celebrated:
                 st.balloons()
                 ss.celebrated = True
-            bd = game.score_breakdown()
-            st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
-            st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
-                    f"{game.guesses_made} guesses.")
-            floor_note = " — floored at the 10-point minimum" \
-                if bd["floored"] else ""
-            st.caption(f"{bd['base']} survival + {bd['tiles']} tile points "
-                       f"− {bd['penalties']} help penalties, "
-                       f"× {bd['multiplier']:g} {game.config.label} bonus"
-                       f"{floor_note}")
+            if game.status is GameStatus.SURVIVED:
+                bd = game.score_breakdown()
+                st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+                st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
+                        f"{game.guesses_made} guesses.")
+                floor_note = " — floored at the 10-point minimum" \
+                    if bd["floored"] else ""
+                st.caption(f"{bd['base']} survival + {bd['tiles']} tile "
+                           f"points − {bd['penalties']} help penalties, "
+                           f"× {bd['multiplier']:g} {game.config.label} "
+                           f"bonus{floor_note}")
+            else:  # duel won by the bot's blunder
+                st.success(f"🤖💥 **The bot said the word — you win the "
+                           f"duel!** Score: **{game_score(game, ss.mode)}**")
+                st.info(f"🔎 {_secret_reveal(game)}")
         else:
             st.error(f"💀 **You Wordled.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
@@ -1238,7 +1416,7 @@ def main() -> None:
         for note in ss.game_unlocks:
             st.success(note)
         lv = ACH.level_for_xp(ss.xp)
-        share_block = (game.share_text(share_title())
+        share_block = (game.share_text(share_title(), won=won)
                        + f"\n⭐ Level {lv['level']} {lv['title']} · "
                          f"🏆 {len(ss.achievements)}/{len(ACH.ACHIEVEMENTS)}")
         st.code(share_block, language=None)
@@ -1289,6 +1467,10 @@ def main() -> None:
         f'<a href="{__homepage__}" target="_blank">Eugen Dimant</a> · '
         f'<a href="{REPO_URL}" target="_blank">GitHub</a></div>',
         unsafe_allow_html=True)
+
+    if ss.get("progress_dirty"):
+        save_progress_cookie()
+        ss.progress_dirty = False
 
     # animations are one-shot: replay only after the next qualifying action
     ss.last_action = None

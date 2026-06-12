@@ -36,7 +36,9 @@ toward the one word you must not say. Survive all your guesses and you win.
 **Daily Challenge** uses a deterministic word-of-the-day, so everyone on
 the planet fights the same word. **Survival** is an endless gauntlet:
 every round costs you an undo and raises the score multiplier — one loss
-ends the run.
+ends the run. **🤖 Duel** is hot potato against a fair bot: alternate
+guesses, whoever says the word loses (simulated baseline: 52% player
+win rate — skill tips it further).
 
 ## Abilities
 
@@ -80,7 +82,11 @@ picks preview live in the grid. Prefer typing? Flip the sidebar switch
   flaunted on the banner.
 - **🎯 Daily side-quests** — one deterministic extra goal per day
   ("win without a single undo", +XP), same for every player.
-- All progression travels with the stats backup file.
+- **💾 Progress persists automatically** — XP, trophies, streaks and
+  daily history are saved in a browser cookie and restored on your next
+  visit; the backup file remains for moving between devices.
+- **📆 Streak heatmap** — a 28-day calendar of your daily wins in the
+  sidebar.
 
 ## Move analysis
 
@@ -126,6 +132,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.11** — top-3 improvement round: 💾 automatic progress
+  persistence (compressed browser cookie, auto-restored on fresh
+  sessions — streaks finally survive a page refresh); 🤖 Duel mode
+  (alternate guesses vs a fair bot, whoever says the word loses;
+  simulated 52% baseline player win rate, ~5 rows per duel); 📆 28-day
+  daily-wins heatmap in the sidebar.
 - **1.5.0.10** — mobile polish round: ability buttons no longer
   overflow (compact labels + smaller phone font); the ⏎ submit key is
   now green so it's unmissable; author + GitHub links in a footer on

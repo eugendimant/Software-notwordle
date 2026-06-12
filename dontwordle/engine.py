@@ -323,9 +323,14 @@ class DontWordleGame:
 
     EMOJI = {GREEN: "🟩", YELLOW: "🟨", GRAY: "⬜"}
 
-    def share_text(self, title: str = "Don't Wordle") -> str:
-        outcome = ("I SURVIVED 🎉" if self.status is GameStatus.SURVIVED
-                   else "I Wordled 💀")
+    def share_text(self, title: str = "Don't Wordle",
+                   won: bool | None = None) -> str:
+        """Emoji result card. ``won`` overrides the outcome line for modes
+        with their own win semantics (e.g. duels won by the opponent's
+        blunder)."""
+        if won is None:
+            won = self.status is GameStatus.SURVIVED
+        outcome = "I SURVIVED 🎉" if won else "I Wordled 💀"
         undo_word = "undo" if self.undos_used == 1 else "undos"
         lines = [f"{title} — {outcome}",
                  f"{self.guesses_made}/{self.config.max_guesses} guesses · "
