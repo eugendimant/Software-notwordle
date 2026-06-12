@@ -26,7 +26,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.0.18"
+_EXPECTED_CORE_VERSION = "1.5.0.19"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -921,8 +921,11 @@ pre, code {
   flex-wrap: nowrap !important; align-items: center;
 }
 .st-key-rulesbar [data-testid="stColumn"] {min-width: 0 !important;}
+.st-key-rulesbar [data-testid="stColumn"]:last-child {
+  display:flex; justify-content:flex-end;
+}
 .st-key-rulesbar [data-testid="stPopover"] {width:auto;}
-.st-key-rulesbar .dw-banner {text-align:left; margin:0;}
+.st-key-rulesbar .dw-banner {text-align:center; margin:0;}
 .st-key-rulesbar [data-testid="stPopover"] button {
   font-size: 0.78rem;
   padding: 0.05rem 0.6rem;
@@ -939,6 +942,11 @@ pre, code {
 .dw-heat .today {outline:1.5px solid #b59f3b;}
 .dw-heat-lab {text-align:center; font-size:0.72rem; opacity:0.7;
               letter-spacing:0.08em; text-transform:uppercase;}
+/* sidebar stats: one tidy line instead of cramped metric tiles */
+.dw-mini-stats {display:flex; justify-content:space-between; gap:8px;
+                font-size:0.78rem; opacity:0.9; margin:2px 0 4px 0;}
+.dw-mini-stats span {white-space:nowrap;}
+.dw-mini-stats b {font-size:0.95rem;}
 /* sidebar: tighter vertical rhythm */
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
   gap: 0.65rem;
@@ -1043,13 +1051,13 @@ section[data-testid="stSidebar"] h1 {
                  text-transform:uppercase;}
 .dw-counts .num {font-size:1.45rem; line-height:1.1;}
 .dw-bar {height:5px; border-radius:3px; background:#262628;
-         margin:0 auto 0 auto; max-width:420px; overflow:hidden;}
+         margin:0 auto 0 auto; max-width:300px; overflow:hidden;}
 .dw-bar .dw-fill {height:100%; border-radius:4px;
                   transition:width .5s ease;}
 .dw-trapped {animation: dw-pulse 1s ease infinite;}
 @keyframes dw-pulse {50% {opacity:0.45;}}
-.dw-footer {text-align:center; opacity:0.8; font-size:0.85rem;
-            margin-top:18px;}
+.dw-footer {text-align:center; opacity:0.7; font-size:0.8rem;
+            margin-top:28px;}
 @media (max-width: 480px) {
   .dw-tile {width:38px; height:38px; font-size:1.25rem;}
   .dw-row {gap:4px;}
@@ -1070,23 +1078,24 @@ section[data-testid="stSidebar"] h1 {
    keyboard row to stay a single horizontal flex line — and keep the
    whole keyboard compact and centered like a phone keyboard rather
    than sprawling across the desktop page. */
-.st-key-clickkbd {max-width: 480px; margin: 0 auto;}
+.st-key-clickkbd {max-width: 580px; margin: 0 auto;}
 .st-key-clickkbd [data-testid="stVerticalBlock"] {gap: 0.22rem !important;}
 .st-key-clickkbd [data-testid="stHorizontalBlock"] {
   flex-wrap: nowrap !important;
-  gap: 0.18rem !important;
+  gap: 5px !important;
+  justify-content: center;   /* shorter rows center like a real keyboard */
   margin-bottom: 0;
 }
 .st-key-clickkbd [data-testid="stColumn"] {
   min-width: 0 !important;
-  flex: 1 1 0% !important;
-  width: auto !important;
+  flex: 0 0 42px !important;  /* constant key size on every row */
+  width: 42px !important;
 }
 .st-key-clickkbd .stButton > button {
-  width: 100% !important;
+  width: 42px !important;
   min-width: 0 !important;
-  height: 2.15rem;
-  min-height: 2.15rem;
+  height: 2.3rem;
+  min-height: 2.3rem;
   padding: 0 !important;
   font-weight: 600;
   font-size: 0.95rem;
@@ -1094,9 +1103,14 @@ section[data-testid="stSidebar"] h1 {
   text-transform: uppercase;
 }
 @media (max-width: 480px) {
+  .st-key-clickkbd [data-testid="stColumn"] {
+    flex: 0 0 7.6vw !important;
+    width: 7.6vw !important;
+  }
   .st-key-clickkbd .stButton > button {
-    height: 2.6rem;       /* thumb-sized on actual phones */
-    min-height: 2.6rem;
+    width: 7.6vw !important;
+    height: 2.55rem;       /* thumb-sized on actual phones */
+    min-height: 2.55rem;
     font-size: 0.9rem;
   }
 }
@@ -1117,7 +1131,7 @@ section[data-testid="stSidebar"] h1 {
   padding: 0.25rem 0.1rem !important;
   font-size: 0.85rem;
   white-space: nowrap;
-  min-height: 2.2rem;
+  min-height: 2.3rem;   /* same line weight as the keyboard keys */
 }
 /* keep the guess box and its button side by side on phones too */
 .st-key-guessrow [data-testid="stHorizontalBlock"] {
@@ -1431,13 +1445,15 @@ def main() -> None:
             f"{ss.mode}:{ss.lang}:{ss.word_len}",
             {"played": 0, "survived": 0, "streak": 0,
              "best_streak": 0, "best_score": 0})
-        c1, c2 = st.columns(2)
-        c1.metric("Played", stats["played"])
         rate = (stats["survived"] / stats["played"] * 100
                 if stats["played"] else 0)
-        c2.metric("Survival %", f"{rate:.0f}%")
-        c1.metric("Streak", stats["streak"])
-        c2.metric("Best score", stats["best_score"])
+        st.markdown(
+            f'<div class="dw-mini-stats">'
+            f'<span><b>{stats["played"]}</b> played</span>'
+            f'<span><b>{rate:.0f}%</b> wins</span>'
+            f'<span><b>{stats["streak"]}</b> streak</span>'
+            f'<span><b>{stats["best_score"]}</b> best</span></div>',
+            unsafe_allow_html=True)
         st.markdown(render_streak_heatmap(), unsafe_allow_html=True)
         if ss.mode == "survival":
             st.metric("Best survival run", ss.survival_best)
@@ -1500,7 +1516,7 @@ def main() -> None:
 
     # ----- top bar: rules chip + mode banner share one compact row ----
     with st.container(key="rulesbar"):
-        c_rules, c_banner = st.columns([1.3, 7.7])
+        c_left, c_banner, c_rules = st.columns([1.4, 7.2, 1.4])
         with c_rules:
             with st.popover("❓ Rules"):
                 st.markdown(HOW_TO_MD)

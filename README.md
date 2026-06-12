@@ -135,6 +135,15 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.19** — front-page alignment round (3 iterations): the
+  keyboard now behaves like a real keyboard — constant 42px keys with
+  shorter rows centered and indented, instead of every row stretching
+  to equal width (keys used to get visibly wider on 9-key rows);
+  geometry verified for all four layouts incl. Russian's 12-key row;
+  the topbar is symmetric (banner truly centered, Rules chip balancing
+  on the right); the danger gauge no longer outweighs the board;
+  sidebar stats are one tidy line instead of cramped metric tiles;
+  control heights unified with the keyboard's line weight.
 - **1.5.0.18** — professional UX calm pass: one compact centered status
   line under the keyboard replaces stacked full-width alert boxes (the
   trapped state was being announced three times at once); move ratings
