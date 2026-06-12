@@ -52,6 +52,22 @@ MODE_HELP = {
 }
 
 
+HOW_TO_MD = (
+    "- Guess words — but **never** the hidden word.\n"
+    "- Every guess must obey all clues: 🟩 stays in its spot, 🟨 must be "
+    "re-used (elsewhere), ⬜ is forbidden.\n"
+    "- The clue rules shrink the pool of playable words, pushing you "
+    "toward the answer. **Survive every guess to win.**\n"
+    "- **↩️ Undo** takes back a guess — even a fatal one. **🛟 Hint** "
+    "reveals a safe word. **👁️ Peek** shows remaining words (risky!).\n"
+    "- Secrets are **frequency-weighted**: if the clues fit two words, "
+    "suspect the common one.\n"
+    "- More 🟩/🟨 on a winning board = higher score."
+)
+
+REPO_URL = "https://github.com/eugendimant/Software-notwordle"
+
+
 def survival_config(round_no: int) -> GameConfig:
     """Round 1 = 5 undos, each round one fewer; multiplier climbs 25%/round."""
     return GameConfig(
@@ -601,6 +617,16 @@ CSS = """
   font-family: "Twemoji Country Flags", "Source Sans Pro", "Source Code Pro",
                sans-serif;
 }
+/* rules popover: a tiny centered chip under the header */
+.st-key-rulesbar {display:flex; justify-content:center; margin:-6px 0 2px 0;}
+.st-key-rulesbar [data-testid="stPopover"] {width:auto;}
+.st-key-rulesbar [data-testid="stPopover"] button {
+  font-size: 0.78rem;
+  padding: 0.05rem 0.6rem;
+  min-height: 1.6rem;
+  border-radius: 999px;
+  opacity: 0.85;
+}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
   font-size: 0.88rem;
@@ -668,6 +694,12 @@ CSS = """
   .dw-tile {width:44px; height:44px; font-size:1.4rem;}
   .dw-row {gap:4px;}
   .dw-key {min-width:24px; height:34px; font-size:0.85rem;}
+  .dw-title {font-size:1.45rem;}
+  .dw-header p {display:none;}   /* tagline: declutter small screens */
+  .dw-banner {font-size:0.92rem; margin:0 0 4px 0;}
+  .dw-counts {gap:22px;}
+  .dw-counts .num {font-size:1.5rem;}
+  .st-key-abilities .stButton > button {font-size:0.72rem;}
 }
 @media (max-width: 380px) {
   .dw-tile {width:38px; height:38px; font-size:1.2rem;}
@@ -838,7 +870,8 @@ def render_click_keyboard(game: DontWordleGame, lang: str) -> None:
             offset = 0
             if extras:
                 cols[0].button("⏎", key="kbd_enter", on_click=act_kbd_enter,
-                               width="stretch", disabled=game.is_over,
+                               type="primary", width="stretch",
+                               disabled=game.is_over,
                                help="Submit the word")
                 offset = 1
             for i, letter in enumerate(row):
@@ -940,6 +973,9 @@ def main() -> None:
     game: DontWordleGame = ss.game
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(HEADER, unsafe_allow_html=True)
+    with st.container(key="rulesbar"):
+        with st.popover("❓ Rules"):
+            st.markdown(HOW_TO_MD)
 
     # ----- sidebar ----------------------------------------------------
     with st.sidebar:
@@ -1000,25 +1036,7 @@ def main() -> None:
 
         never_played = not any(s["played"] for s in ss.stats.values())
         with st.expander("📖 How to play", expanded=never_played):
-            st.markdown(
-                f"- Guess {ss.word_len}-letter words — but **never** the "
-                "hidden word.\n"
-                "- Every guess must obey all clues so far: 🟩 greens stay "
-                "in place, 🟨 yellows must be re-used, ⬜ grays are "
-                "forbidden.\n"
-                "- The clue rules shrink the pool of playable words and "
-                "push you toward the answer. **Survive every guess to "
-                "win.**\n"
-                "- **↩️ Undo** takes back a guess — even a fatal one.\n"
-                "- **🛟 Hint** reveals a guaranteed-safe word.\n"
-                "- **👁️ Peek** shows some remaining words… one might be "
-                "the answer.\n"
-                "- Secrets are **weighted by real-world frequency**: "
-                "everyday words are several times likelier than obscure "
-                "ones. If the clues fit two words, suspect the common "
-                "one!\n"
-                "- Surviving with more 🟩/🟨 on the board scores higher."
-            )
+            st.markdown(HOW_TO_MD)
 
         if ss.session_log:
             wins = sum(e["won"] for e in ss.session_log)
@@ -1090,22 +1108,20 @@ def main() -> None:
     elif ss.mode == "daily":
         streak = ss.daily_streaks.get(
             f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
-        flame = f' · <span class="sub">🔥 {streak}-day streak</span>' \
-            if streak >= 2 else ""
-        st.markdown(
-            f'<div class="dw-banner">📅 Daily Challenge '
-            f'<span class="sub">— {datetime.date.today():%B %d, %Y}'
-            f'</span>{flame}</div>', unsafe_allow_html=True)
+        parts = [f'📅 Daily <span class="sub">'
+                 f'{datetime.date.today():%b %d}</span>']
+        if streak >= 2:
+            parts.append(f'<span class="sub">🔥 {streak}-day streak</span>')
         if not game.is_over:
             # use the date pinned at game creation so the banner and the
             # award agree even across midnight
             quest_date = (ss.get("daily_key")
                           or datetime.date.today().isoformat()).split(":")[0]
             quest = ACH.daily_quest(quest_date, ss.lang, ss.word_len)
-            st.markdown(
-                f'<div class="dw-banner"><span class="sub">🎯 Side-quest: '
-                f'{quest.label} (+{quest.xp} XP)</span></div>',
-                unsafe_allow_html=True)
+            parts.append(f'<span class="sub">🎯 {quest.label} '
+                         f'(+{quest.xp} XP)</span>')
+        st.markdown(f'<div class="dw-banner">{" · ".join(parts)}</div>',
+                    unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
     buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
@@ -1174,16 +1190,16 @@ def main() -> None:
         # only show abilities the current mode actually has
         actions = []
         if game.config.max_undos > 0:
-            actions.append((f"↩️ Undo ({fmt(game.undos_left)})", act_undo,
+            actions.append((f"↩️ Undo {fmt(game.undos_left)}", act_undo,
                             not game.can_undo()))
         if game.config.max_hints > 0:
-            actions.append((f"🛟 Hint ({fmt(game.hints_left)})", act_hint,
+            actions.append((f"🛟 Hint {fmt(game.hints_left)}", act_hint,
                             game.hints_left <= 0))
         if game.config.max_peeks > 0:
-            actions.append((f"👁️ Peek ({fmt(game.peeks_left)})", act_peek,
+            actions.append((f"👁️ Peek {fmt(game.peeks_left)}", act_peek,
                             game.peeks_left <= 0))
         if game.guesses_made == 0:
-            actions.append(("🎲 Random start", act_random_start, False))
+            actions.append(("🎲 Random", act_random_start, False))
         if actions:
             with st.container(key="abilities"):
                 for col, (label, cb, off) in zip(st.columns(len(actions)),
@@ -1266,6 +1282,13 @@ def main() -> None:
                       on_click=act_new_game)
         else:
             st.button("🔁 Play again", on_click=act_new_game, type="primary")
+
+    # footer on the page itself — the sidebar is collapsed on phones
+    st.markdown(
+        f'<div class="dw-footer">v{__version__} · built by '
+        f'<a href="{__homepage__}" target="_blank">Eugen Dimant</a> · '
+        f'<a href="{REPO_URL}" target="_blank">GitHub</a></div>',
+        unsafe_allow_html=True)
 
     # animations are one-shot: replay only after the next qualifying action
     ss.last_action = None

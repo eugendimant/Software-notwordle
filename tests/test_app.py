@@ -117,7 +117,7 @@ def test_peek_shows_words():
 
 def test_random_starting_word_first_turn_only():
     at = make_app()
-    button(at, "🎲 Random start").click()
+    button(at, "🎲 Random").click()
     at.run()
     assert not at.exception
     filled = at.session_state["guess_input"]
@@ -128,7 +128,7 @@ def test_random_starting_word_first_turn_only():
     game = at.session_state["game"]
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
-    assert not [b for b in at.button if "Random start" in b.label]
+    assert not [b for b in at.button if "🎲 Random" in b.label]
 
 
 def test_invalid_guess_preserves_typed_word():
@@ -166,7 +166,7 @@ def test_modes_hide_unavailable_abilities():
     # zen shows infinite budgets
     at.radio(key="mode_label").set_value("🧘 Zen").run()
     assert not at.exception
-    assert any(b.label == "↩️ Undo (∞)" for b in at.button)
+    assert any(b.label == "↩️ Undo ∞" for b in at.button)
 
 
 def test_stats_export_import_roundtrip():
@@ -527,9 +527,9 @@ def test_loss_gives_participation_xp_only():
 
 def test_daily_streak_and_quest_banner():
     at = make_app()
-    # quest banner shows while playing the daily
+    # quest banner shows while playing the daily (merged into one line)
     page = " ".join(str(md.value) for md in at.markdown)
-    assert "Side-quest" in page
+    assert "🎯" in page and "XP)" in page
     game = at.session_state["game"]
     game.secret = "crane"
     for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):

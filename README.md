@@ -126,6 +126,13 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.10** — mobile polish round: ability buttons no longer
+  overflow (compact labels + smaller phone font); the ⏎ submit key is
+  now green so it's unmissable; author + GitHub links in a footer on
+  the page itself (the sidebar is collapsed on phones); decluttered
+  top-of-page (tagline hidden on small screens, smaller title, daily
+  date/streak/quest merged into one line); ❓ Rules popover under the
+  header toggles the rules on/off anywhere.
 - **1.5.0.9** — clue-violation errors now name the exact rule you broke
   ("E can't sit in spot 3 again — it was yellow there" / "spot 4 is
   locked to N (green)" / "T was ruled out — it's gray" / "must use E")
