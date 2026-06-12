@@ -1,6 +1,6 @@
-# 📱 Taking DON'T Wordle to the iPhone App Store — The Complete Playbook
+# 📱 Taking AVOIDLE to the iPhone App Store — The Complete Playbook
 
-*Prepared for Eugen Dimant · v1.0 · honest edition*
+*Prepared for Eugen Dimant · v2.0 (updated for game v1.5.0.13) · honest edition*
 
 ---
 
@@ -25,12 +25,14 @@ under this name risks:
 - a trademark complaint *after* approval, which can nuke the listing
   and strike your developer account.
 
-**Action: rename for the store.** The *mechanic* (colored letter tiles)
+**Action: rename for the store. ✅ DECIDED: the game is now AVOIDLE** (renamed throughout the codebase). The *mechanic* (colored letter tiles)
 is not protectable and dozens of approved games use it — only the name
-and trade dress are the issue. Candidates that keep the hook:
-- **Don't Say It!** (subtitle: "the anti word game")
-- **DodgeWord**
-- **Unword — Survive the Words**
+and trade dress are the issue. Candidates that keep the hook (see Section 11 for the full
+brainstorm): **Avoidle**, **Don't Say It!**, **DodgeWord**.
+⚠️ **Avoid any name *containing* the string "Wordle"** — including
+"UnWordle" or "NotWordle": the mark is inside the name, which is
+exactly what NYT's takedowns target. The "-dle" *suffix* on its own
+has proven safe (Quordle, Nerdle, Heardle all lived on the store).
 Also: never mention "Wordle" in the app name, subtitle, keywords or
 screenshots (**Guideline 2.3.7** bans referencing other brands in
 metadata). You *may* describe it as "the anti word-guessing game."
@@ -60,12 +62,36 @@ widget showing today's streak. That package comfortably clears 4.2.
 
 **This repo is the spec.** The port is mechanical because the game is
 already isolated from the UI:
-- `dontwordle/engine.py` (~300 lines of pure logic) → TypeScript 1:1
-- `dontwordle/analysis.py` → TypeScript (or skip move-ratings in v1)
-- `dontwordle/achievements.py` → map to **Game Center achievements**
-- `dontwordle/data/**` → ship as JSON assets (all 12 dictionaries ready)
-- `tests/test_engine.py` → port as the conformance suite; if the TS
-  engine passes the ported tests, the game is identical
+- `avoidle/engine.py` (pure logic incl. trap tracking) → TypeScript 1:1
+- `avoidle/analysis.py` (move ratings, best-move review, trap
+  forecast, smart hints) → TypeScript; ship in v1 — it's a signature
+  feature
+- `avoidle/achievements.py` (15 achievements, XP/levels, daily
+  side-quests) → map 1:1 to **Game Center achievements** + a Game
+  Center leaderboard on total XP
+- `avoidle/bot.py` (3 fair duel opponents, balance validated over
+  24,000 simulated duels) → TypeScript; Duel is the headline mode for
+  the store listing ("play AGAINST the bot — whoever says the word
+  loses")
+- `avoidle/words.py` + `avoidle/data/**` → ship as JSON assets
+  (12 dictionaries: en/de/es/ru × 4/5/6 letters, frequency-ordered,
+  profanity-filtered — the filtering matters for the 4+ age rating)
+- `tests/` (145 tests) → port the engine/bot/achievement suites as the
+  conformance suite; if the TS engine passes, the game is identical
+
+### Feature inventory the iOS build must include (game v1.5.0.13)
+- 7 modes: Daily, Classic, 🤖 Duel (3 bot strengths), Hard, Impossible,
+  Survival gauntlet, Zen
+- 4 languages × 3 word lengths, per-combo daily words (crc32 scheme —
+  keep identical so web + iOS players share the same daily)
+- Abilities: undo, smart hint, peek, random start, accept-fate
+- Live move-safety ratings + post-game best-move review + endgame trap
+  forecast
+- XP/levels (10 titles), 15 achievements, daily streaks + 28-day
+  heatmap, daily side-quests
+- Persistence: replace the web cookie with native storage (UserDefaults
+  / Capacitor Preferences) — strictly better, no 4 KB ceiling
+- Share cards (emoji grid + level/trophy line) → iOS share sheet
 
 ---
 
@@ -98,7 +124,7 @@ already isolated from the UI:
    your Apple ID ($99/year). Individual enrollment is fine (your name
    shows as seller; an LLC needs a D-U-N-S number).
 2. **Xcode** (Mac required) — latest version from the App Store.
-3. **Bundle ID** — e.g. `io.github.eugendimant.dontsayit` (Certificates,
+3. **Bundle ID** — e.g. `io.github.eugendimant.avoidle` (Certificates,
    Identifiers & Profiles → Identifiers → +). Enable capabilities:
    Push Notifications, Game Center.
 4. **Signing** — in Xcode: Settings → Accounts → your team →
@@ -124,7 +150,7 @@ already isolated from the UI:
 ## 5. The listing (this is where acceptance is won)
 
 ### Metadata
-- **Name** (30 chars): `Don't Say It! — Anti Word Game` *(no "Wordle")*
+- **Name** (30 chars): `Avoidle — Don't Say the Word` *(no "Wordle")*
 - **Subtitle** (30 chars): `Dodge the hidden word & win`
 - **Keywords** (100 chars, comma-separated, no brand names):
   `word,game,puzzle,daily,anti,avoid,letters,brain,streak,vocabulary,german,spanish,russian`
@@ -202,14 +228,36 @@ manually so launch day is yours).
 4. **Launch sequence**: PWA live first (Path A) → collect a waitlist on
    eugendimant.github.io → TestFlight link to the first 100 (TestFlight
    scarcity is its own marketing) → App Store release + Product Hunt +
-   r/wordgames + the original dontwordle community → ASO iterate on
+   r/wordgames + the original avoidle community → ASO iterate on
    keywords every 2 weeks.
 5. **Game Center leaderboards** give the competitive loop without
    building a backend.
 
 ---
 
-## 8. Timeline & budget
+## 8. What you pay Apple (exact numbers)
+
+| Item | Cost | Mandatory? |
+|---|---|---|
+| Apple Developer Program | **$99/year** (≈€99) | Yes — the only mandatory fee |
+| App review, hosting, TestFlight, Game Center | $0 | included |
+| Revenue cut on a **free app with no purchases** | **$0 — Apple takes nothing** | n/a |
+| If you later add purchases (tip jar, themes) | 15% of revenue (Small Business Program, under $1M/yr); 30% above | only if you sell |
+| A Mac to build with | you need access to macOS + Xcode | borrow, or rent a cloud Mac (MacStadium/Scaleway ~$20–50/mo for the build weeks) |
+
+So: **$99/year, full stop**, for a free app — and the first year is the only certain cost.
+
+## 9. Honest acceptance-risk assessment
+
+| Approach | Rejection risk |
+|---|---|
+| WebView wrapper around the Streamlit site | **~certain rejection** (Guideline 4.2) — don't try |
+| Proper offline port, but named with "Wordle" in it | **High** — 5.2 IP / 4.1 copycat, plus NYT takedown exposure even post-approval |
+| Proper offline port, original name, checklist followed | **Good odds.** Industry-wide ~60% of first submissions pass; with the Section 6 checklist (the known rejection causes) you're well above that. Realistic worst case: one rejection for something cosmetic → fix → resubmit → approved within days |
+
+What could still trip you despite everything: a reviewer hitting a crash you never saw (mitigate: the TestFlight soak week), a metadata nit (screenshot shows UI not in the binary), or a subjective 4.3 "spam/saturated category" call — rare for games with this much original mechanics (Duel mode is your strongest differentiation argument; mention it in Review Notes). **Nobody can guarantee first-pass approval; plan the launch date with one review cycle of slack.**
+
+## 10. Timeline & budget
 
 | Week | Milestone |
 |------|-----------|

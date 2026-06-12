@@ -1,13 +1,13 @@
-# 🙅 DON'T Wordle
+# 🚫 Avoidle
 
-**The anti-Wordle.** Six guesses — and your only job is to *never* say the
-hidden word. A fast, modern [Streamlit](https://streamlit.io) adaptation of
+**Avoidle** — the word game where guessing the answer means you LOSE.
+Six guesses, and your only job is to *never* say the hidden word. A fast, modern [Streamlit](https://streamlit.io) adaptation of
 the cult classic [dontwordle.com](https://dontwordle.com), rebuilt from
 scratch with extra game modes, abilities, move-quality analysis, four
 dictionary languages, scoring and stats.
 
 > Built by [Eugen Dimant](https://eugendimant.github.io) · current version
-> in [`dontwordle/__init__.py`](dontwordle/__init__.py)
+> in [`avoidle/__init__.py`](avoidle/__init__.py)
 
 ## Why it's hard (and fun)
 
@@ -36,7 +36,12 @@ toward the one word you must not say. Survive all your guesses and you win.
 **Daily Challenge** uses a deterministic word-of-the-day, so everyone on
 the planet fights the same word. **Survival** is an endless gauntlet:
 every round costs you an undo and raises the score multiplier — one loss
-ends the run.
+ends the run. **🤖 Duel** is hot potato against a fair bot at three
+strengths — 😴 Easy, 🤖 Normal, 🧠 Hard (validated over 24,000 simulated
+duels: 59% / 42% / 36% player win rate for a naive player, 72% / 57% /
+50% for a skilled one; tougher bots pay bigger score multipliers).
+Every bot plays with public information only — it can genuinely
+blunder into the secret.
 
 ## Abilities
 
@@ -80,7 +85,11 @@ picks preview live in the grid. Prefer typing? Flip the sidebar switch
   flaunted on the banner.
 - **🎯 Daily side-quests** — one deterministic extra goal per day
   ("win without a single undo", +XP), same for every player.
-- All progression travels with the stats backup file.
+- **💾 Progress persists automatically** — XP, trophies, streaks and
+  daily history are saved in a browser cookie and restored on your next
+  visit; the backup file remains for moving between devices.
+- **📆 Streak heatmap** — a 28-day calendar of your daily wins in the
+  sidebar.
 
 ## Move analysis
 
@@ -105,10 +114,10 @@ point it at this repo, main file `app.py`. Done.
 ## Architecture & testing
 
 ```
-dontwordle/
+avoidle/
   engine.py     pure game logic (zero UI deps)
   words.py      word lists, daily/random secrets
-  simulate.py   self-play balance harness (python -m dontwordle.simulate)
+  simulate.py   self-play balance harness (python -m avoidle.simulate)
   analysis.py   numpy-vectorized move-quality analyzer
   data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
@@ -116,7 +125,7 @@ tests/          120+ tests: engine, analysis, meta-game, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
-language (`python -m dontwordle.simulate 300`): Classic lands near a
+language (`python -m avoidle.simulate 300`): Classic lands near a
 44–61% bot survival rate across languages, Impossible near 3–12% —
 brutal but beatable.
 
@@ -126,6 +135,42 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.14** — 🚫 the game is now **AVOIDLE**: full rebrand (package,
+  class names, UI, share cards, docs) with a professional tile wordmark
+  (AVOID on slate, LE on green, red "do not cross" bar); loss verb is
+  now "you said the word"; App Store guide locked to the Avoidle name
+  and bundle id. Daily-word seeds and saved progress are untouched —
+  existing players keep their words, streaks and cookies.
+- **1.5.0.13** — thorough review round (2 agents): real zlib-bomb cap
+  on backup/cookie decoding (the old guard was ineffective — a 3KB
+  upload could balloon to 200MB); duel fairness fixes: the bot's tiles
+  no longer count toward your achievements/score, the best-move review
+  covers only your rows, 12-row outlast wins now pay the bot-level
+  multiplier, and Houdini can't unlock off the bot's trap; cookie
+  history pruned to what the app needs so persistence never silently
+  stops for long-term players; duel balance reproducible via
+  `python -m avoidle.simulate duel`; rules text notes Duel has no
+  undos.
+- **1.5.0.12** — duel bots got a difficulty ladder: 😴 Easy (reckless,
+  gravitates toward likely secrets), 🤖 Normal (dodges the likeliest
+  quartile), 🧠 Hard (plays provably-safe non-answer words while they
+  exist); all fair — public info only. Balance validated over 24,000
+  simulated duels (4,000 per cell, naive and skilled players); Easy
+  re-tuned from 51% to 59% beginner win rate; win multipliers 1×/1.5×/
+  2.5× by strength; selector in the sidebar restarts the duel fairly.
+- **1.5.0.11** — top-3 improvement round: 💾 automatic progress
+  persistence (compressed browser cookie, auto-restored on fresh
+  sessions — streaks finally survive a page refresh); 🤖 Duel mode
+  (alternate guesses vs a fair bot, whoever says the word loses;
+  simulated 52% baseline player win rate, ~5 rows per duel); 📆 28-day
+  daily-wins heatmap in the sidebar.
+- **1.5.0.10** — mobile polish round: ability buttons no longer
+  overflow (compact labels + smaller phone font); the ⏎ submit key is
+  now green so it's unmissable; author + GitHub links in a footer on
+  the page itself (the sidebar is collapsed on phones); decluttered
+  top-of-page (tagline hidden on small screens, smaller title, daily
+  date/streak/quest merged into one line); ❓ Rules popover under the
+  header toggles the rules on/off anywhere.
 - **1.5.0.9** — clue-violation errors now name the exact rule you broke
   ("E can't sit in spot 3 again — it was yellow there" / "spot 4 is
   locked to N (green)" / "T was ruled out — it's gray" / "must use E")

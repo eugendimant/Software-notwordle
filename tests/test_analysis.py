@@ -5,9 +5,9 @@ import time
 
 import pytest
 
-from dontwordle import words as W
-from dontwordle.analysis import analyzer_for, pattern_id, rate_move
-from dontwordle.engine import DontWordleGame, PRESETS, score_guess
+from avoidle import words as W
+from avoidle.analysis import analyzer_for, pattern_id, rate_move
+from avoidle.engine import AvoidleGame, PRESETS, score_guess
 
 
 def test_pattern_id_bijective_on_examples():
@@ -36,7 +36,7 @@ def test_retained_matches_engine_pool():
     """Retained count of the played move == the engine's actual new pool."""
     rng = random.Random(11)
     az = analyzer_for("en")
-    g = DontWordleGame("crane", W.allowed_guesses(), PRESETS["classic"],
+    g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"],
                        rng=rng)
     for _ in range(4):
         if g.is_over:
@@ -50,7 +50,7 @@ def test_retained_matches_engine_pool():
 
 def test_rate_move_exact_small_pool():
     az = analyzer_for("en")
-    g = DontWordleGame("crane", W.allowed_guesses(), PRESETS["classic"])
+    g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
     g.submit("aahed")  # shrinks pool to a few hundred
     pool = list(g.remaining_words)
     word = next(w for w in pool if w != "crane")
@@ -78,7 +78,7 @@ def test_rate_move_sampled_large_pool():
 
 def test_grades_cover_scale():
     az = analyzer_for("en")
-    g = DontWordleGame("crane", W.allowed_guesses(), PRESETS["classic"])
+    g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
     g.submit("aahed")
     pool = list(g.remaining_words)
     rs = [rate_move(az, w, pool, "crane") for w in pool[:30]]
@@ -133,10 +133,10 @@ def test_multilength_dictionaries(lang, length):
 
 @pytest.mark.parametrize("length", [4, 6])
 def test_engine_plays_other_lengths(length):
-    from dontwordle.engine import GameStatus
+    from avoidle.engine import GameStatus
     rng = random.Random(3)
     secret = W.random_secret("en", length, rng)
-    g = DontWordleGame(secret, W.allowed_guesses("en", length),
+    g = AvoidleGame(secret, W.allowed_guesses("en", length),
                        PRESETS["classic"], rng=rng)
     assert g.word_length == length
     import pytest as _pt
@@ -212,9 +212,9 @@ def test_daily_secret_weighted_and_deterministic():
 
 
 def test_best_safe_hint_is_safe_and_beats_random():
-    from dontwordle.analysis import best_safe_hint
+    from avoidle.analysis import best_safe_hint
     az = analyzer_for("en")
-    g = DontWordleGame("crane", W.allowed_guesses(), PRESETS["classic"])
+    g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
     g.submit("aahed")
     pool = list(g.remaining_words)
     rng = random.Random(4)

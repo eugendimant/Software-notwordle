@@ -8,7 +8,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from dontwordle.engine import GameStatus
+from avoidle.engine import GameStatus
 
 APP = str(Path(__file__).parent.parent / "app.py")
 
@@ -38,7 +38,7 @@ def test_clickable_keyboard_is_the_default():
     at = make_click_app()
     assert at.session_state["input_mode"] == "click"
     assert at.button(key="kbd_q") is not None  # keyboard rendered
-    from dontwordle import words as W
+    from avoidle import words as W
     assert W.LANGUAGES["en"].startswith("🇺🇸")  # American English
 
 
@@ -117,7 +117,7 @@ def test_peek_shows_words():
 
 def test_random_starting_word_first_turn_only():
     at = make_app()
-    button(at, "🎲 Random start").click()
+    button(at, "🎲 Random").click()
     at.run()
     assert not at.exception
     filled = at.session_state["guess_input"]
@@ -128,7 +128,7 @@ def test_random_starting_word_first_turn_only():
     game = at.session_state["game"]
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
-    assert not [b for b in at.button if "Random start" in b.label]
+    assert not [b for b in at.button if "🎲 Random" in b.label]
 
 
 def test_invalid_guess_preserves_typed_word():
@@ -166,12 +166,12 @@ def test_modes_hide_unavailable_abilities():
     # zen shows infinite budgets
     at.radio(key="mode_label").set_value("🧘 Zen").run()
     assert not at.exception
-    assert any(b.label == "↩️ Undo (∞)" for b in at.button)
+    assert any(b.label == "↩️ Undo ∞" for b in at.button)
 
 
 def test_stats_export_import_roundtrip():
     import app as app_module
-    exported = ('{"app": "dontwordle", "version": "x", '
+    exported = ('{"app": "avoidle", "version": "x", '
                 '"stats": {"daily": {"played": 3, "survived": 2, '
                 '"streak": 2, "best_streak": 2, "best_score": 412}, '
                 '"bogus_mode": {"played": 1}}, "survival_best": 777}')
@@ -184,7 +184,7 @@ def test_stats_export_import_roundtrip():
 
 
 def test_word_length_switch_starts_fresh_game():
-    from dontwordle import words as W
+    from avoidle import words as W
     at = make_app()
     at.selectbox(key="len_select").set_value(6).run()
     assert not at.exception
@@ -296,7 +296,7 @@ def test_legacy_stats_keys_upgrade():
 
 
 def test_language_switch_starts_fresh_game_in_that_dictionary():
-    from dontwordle import words as W  # noqa
+    from avoidle import words as W  # noqa
     at = make_app()
     at.selectbox(key="lang_select").set_value("de").run()
     assert not at.exception
@@ -395,7 +395,7 @@ def test_daily_practice_replay_does_not_farm_stats():
 
 def test_fatal_and_forced_grades():
     import random as _random
-    from dontwordle.analysis import analyzer_for, rate_move
+    from avoidle.analysis import analyzer_for, rate_move
     az = analyzer_for("en")
     # playing the secret is graded fatal, never 'brilliant'
     r = rate_move(az, "crane", az.words[:50] + ["crane"], "crane",
@@ -436,7 +436,7 @@ def test_win_reveals_secret_and_frequency():
 
 
 def test_trap_forecast_matches_brute_force():
-    from dontwordle.engine import score_guess
+    from avoidle.engine import score_guess
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
@@ -515,7 +515,7 @@ def test_win_awards_xp_and_achievements():
 
 
 def test_loss_gives_participation_xp_only():
-    from dontwordle import achievements as ACH
+    from avoidle import achievements as ACH
     at = make_app()
     game = at.session_state["game"]
     game.undos_used = game.config.max_undos  # make the loss final
@@ -527,9 +527,9 @@ def test_loss_gives_participation_xp_only():
 
 def test_daily_streak_and_quest_banner():
     at = make_app()
-    # quest banner shows while playing the daily
+    # quest banner shows while playing the daily (merged into one line)
     page = " ".join(str(md.value) for md in at.markdown)
-    assert "Side-quest" in page
+    assert "🎯" in page and "XP)" in page
     game = at.session_state["game"]
     game.secret = "crane"
     for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
@@ -556,7 +556,7 @@ def test_backup_roundtrip_with_progress_fields():
 
 def test_hostile_backup_files_rejected_or_clamped():
     import app as app_module
-    from dontwordle import achievements as ACH
+    from avoidle import achievements as ACH
     # absurd-but-finite xp is clamped, not allowed to hang the session
     p = app_module.parse_stats_json('{"stats": {}, "xp": 1e300}')
     assert p["xp"] == ACH.XP_CAP
@@ -649,6 +649,197 @@ def test_session_log_and_share_card_meta():
     assert "pts" in side  # recap rendered
 
 
+def test_progress_cookie_roundtrip():
+    import app as app_module
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["xp"] > 0
+    # encode within the live session, decode outside it
+    at.session_state["_token"] = None
+    # exercise the codec directly on an export-shaped payload
+    exported = (
+        '{"stats": {"daily:en:5": {"played": 1, "survived": 1, "streak": 1,'
+        ' "best_streak": 1, "best_score": 373}}, "survival_best": 0,'
+        ' "xp": 473, "achievements": ["first_win"],'
+        ' "daily_streaks": {"en:5": {"last": "2026-06-12", "streak": 1}},'
+        ' "daily_done": ["2026-06-12:en:5"],'
+        ' "daily_win_dates": ["2026-06-12:en:5"]}')
+    import base64
+    import zlib
+    token = base64.urlsafe_b64encode(
+        zlib.compress(exported.encode())).decode()
+    payload = app_module.decode_progress(token)
+    assert payload["xp"] == 473
+    assert payload["achievements"] == {"first_win"}
+    assert payload["daily_win_dates"] == {"2026-06-12:en:5"}
+    # tampered tokens are rejected, never raise
+    assert app_module.decode_progress("not-a-token!!") is None
+    assert app_module.decode_progress(token[:-10]) is None
+
+
+def test_duel_mode_full_flow():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.label == "Duel"
+    assert game.config.max_undos == 0 and game.config.max_guesses == 12
+    game.secret = "crane"
+    game.rng = _random.Random(7)  # deterministic bot
+    safe = next(w for w in game.remaining_words if w != "crane")
+    guess(at, safe)
+    game = at.session_state["game"]
+    if not game.is_over:
+        # the bot answered: two rows on the board after one player move
+        assert game.guesses_made == 2
+        # exactly one live rating (the player's move only)
+        assert len(at.session_state["ratings"]) == 1
+    # play on until the duel ends
+    for _ in range(8):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        safe = next((w for w in game.remaining_words if w != game.secret),
+                    game.secret)
+        guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over
+    import app as app_module
+    won = app_module.player_won(game, "duel")
+    stats = at.session_state["stats"]["duel:en:5"]
+    assert stats["played"] == 1
+    assert stats["survived"] == (1 if won else 0)
+    if won and game.status is GameStatus.WORDLED:
+        # bot blunder win: fatal row count is even, score comes from app
+        assert len(game.history) % 2 == 0
+        assert stats["best_score"] == app_module.duel_score(game)
+
+
+def test_bot_levels_play_fair_and_differ():
+    import random as _random
+    from avoidle import words as W
+    from avoidle.bot import bot_pick, _answer_rank, BOT_LEVELS
+    ranks = _answer_rank("en", 5)
+    pool = list(W.allowed_guesses())[:400] + list(W.answers())[:50]
+    rng = _random.Random(1)
+    for level in BOT_LEVELS:
+        pick = bot_pick(level, pool, "en", 5, rng)
+        assert pick in pool
+    # hard always plays a provably-safe non-answer word when one exists
+    for seed in range(20):
+        pick = bot_pick("hard", pool, "en", 5, _random.Random(seed))
+        assert pick not in ranks
+    # cornered among answers only: hard gambles on the rarest
+    answers_only = list(W.answers())[:10] + [list(W.answers())[-1]]
+    pick = bot_pick("hard", answers_only, "en", 5, rng)
+    assert pick == max(answers_only, key=lambda w: ranks[w])
+    # trapped pool: every level is forced, like a human
+    for level in BOT_LEVELS:
+        assert bot_pick(level, ["crane"], "en", 5, rng) == "crane"
+
+
+def test_duel_bot_strength_selector():
+    from avoidle.bot import BOT_MULTIPLIER
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    assert not at.exception
+    assert at.session_state["bot_level"] == "normal"
+    at.selectbox(key="bot_select").set_value("hard").run()
+    assert not at.exception
+    assert at.session_state["bot_level"] == "hard"
+    assert at.session_state["game"].guesses_made == 0  # fresh duel
+    # harder bots pay more when beaten
+    assert BOT_MULTIPLIER["hard"] > BOT_MULTIPLIER["normal"] \
+        > BOT_MULTIPLIER["easy"]
+
+
+def test_duel_player_blunder_is_a_loss():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    game = at.session_state["game"]
+    guess(at, game.secret)  # player says the word -> instant loss
+    game = at.session_state["game"]
+    assert game.status is GameStatus.WORDLED
+    assert not app_module.player_won(game, "duel")
+    assert at.session_state["stats"]["duel:en:5"]["survived"] == 0
+
+
+def test_streak_heatmap_renders_wins():
+    import datetime
+    at = make_app()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_win_dates"].add(f"{today}:en:5")
+    at.run()
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "dw-heat" in blob and 'class="win today"' in blob
+
+
+def test_zlib_bomb_rejected_without_ballooning():
+    import app as app_module
+    import base64
+    import time
+    import zlib
+    bomb = base64.urlsafe_b64encode(
+        zlib.compress(b"0" * (50 * 1024 * 1024), 9)).decode()
+    t0 = time.perf_counter()
+    assert app_module.decode_progress(bomb) is None
+    assert time.perf_counter() - t0 < 1.0  # stopped at the 1MB cap
+
+
+def test_cookie_prunes_history_but_export_keeps_it():
+    import datetime
+    import app as app_module
+    at = make_app()
+    old = (datetime.date.today()
+           - datetime.timedelta(days=400)).isoformat()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_done"].update({f"{old}:en:5", f"{today}:en:5"})
+    at.session_state["daily_win_dates"].add(f"{old}:en:5")
+    # drive the codec on a synthetic session via the pure helper
+    recent = app_module._recent({f"{old}:en:5", f"{today}:en:5"}, 30)
+    assert recent == [f"{today}:en:5"]  # the stale entry is pruned
+    assert app_module._recent({f"{old}:en:5"}, 100000) == [f"{old}:en:5"]
+
+
+def test_duel_context_counts_player_tiles_only():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    import random as _random
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game.rng = _random.Random(7)
+    for _ in range(6):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        safe = next((w for w in game.remaining_words if w != game.secret),
+                    game.secret)
+        guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over
+    # the recorded best score (if won) must use the level multiplier
+    won = app_module.player_won(game, "duel")
+    stats = at.session_state["stats"]["duel:en:5"]
+    if won:
+        assert stats["best_score"] == app_module.duel_score(game)
+    # review covers player rows only
+    if at.session_state["review"] is None:
+        btns = [b for b in at.button if b.label.startswith("Analyze")]
+        if btns:
+            btns[0].click()
+            at.run()
+    review = at.session_state["review"]
+    if review is not None:
+        player_rows = (len(game.history) + 1) // 2
+        assert len(review) == player_rows
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret
@@ -717,7 +908,7 @@ def test_new_game_button():
 
 
 def test_version_and_homepage_in_sidebar():
-    from dontwordle import __homepage__, __version__
+    from avoidle import __homepage__, __version__
     at = make_app()
     rendered = " ".join(str(md.value) for md in at.markdown)
     sidebar_md = " ".join(str(md.value) for md in at.sidebar.markdown)
