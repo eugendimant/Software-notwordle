@@ -11,10 +11,28 @@ import datetime
 import functools
 import json
 import random
+import sys
 import zlib
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+# ----------------------------------------------------------------------
+# Hot-redeploy guard: Streamlit Cloud re-runs THIS file on source
+# updates but keeps previously imported modules cached. A new app.py
+# calling an old avoidle module (mismatched signatures/classes) caused
+# real production errors. If versions disagree, evict the cached
+# package so the imports below load the matching code.
+# ----------------------------------------------------------------------
+_EXPECTED_CORE_VERSION = "1.5.0.17"
+try:
+    import avoidle as _core_probe
+    if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
+        for _name in [n for n in list(sys.modules)
+                      if n == "avoidle" or n.startswith("avoidle.")]:
+            del sys.modules[_name]
+except Exception:
+    pass
 
 from avoidle import __homepage__, __version__
 from avoidle import achievements as ACH
@@ -39,7 +57,7 @@ from avoidle.engine import (
 MODES = {
     "📅 Daily Challenge": "daily",
     "🎲 Classic": "classic",
-    "🤖 Duel": "duel",
+    "🆚 Duel": "duel",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
     "⚔️ Survival": "survival",
@@ -71,7 +89,7 @@ HOW_TO_MD = (
     "- The clue rules shrink the pool of playable words, pushing you "
     "toward the answer. **Survive every guess to win.**\n"
     "- **↩️ Undo** takes back a guess — even a fatal one (no undos "
-    "in 🤖 Duel). **🛟 Hint** "
+    "in 🆚 Duel). **💡 Hint** "
     "reveals a safe word. **👁️ Peek** shows remaining words (risky!).\n"
     "- Secrets are **frequency-weighted**: if the clues fit two words, "
     "suspect the common one.\n"
@@ -522,16 +540,16 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
             bot_word = game.rng.choice(game.remaining_words)
         game.submit(bot_word)
         if game.status is GameStatus.WORDLED:
-            ss.message = ("win", f"🤖 The bot said “{bot_word.upper()}” — "
+            ss.message = ("win", f"👾 The bot said “{bot_word.upper()}” — "
                                  "the hidden word. YOU WIN the duel!")
         elif game.status is GameStatus.SURVIVED:
-            ss.message = ("win", "🤝 Twelve rows and nobody said it — "
+            ss.message = ("win", "🏁 Twelve rows and nobody said it — "
                                  "you outlasted the bot. You win!")
         elif game.is_trapped:
-            ss.message = ("warn", f"🤖 played “{bot_word.upper()}”. Only "
+            ss.message = ("warn", f"👾 played “{bot_word.upper()}”. Only "
                                   "the hidden word remains — your turn…")
         else:
-            ss.message = ("ok", f"🤖 played “{bot_word.upper()}”. "
+            ss.message = ("ok", f"👾 played “{bot_word.upper()}”. "
                                 "Your turn.")
     elif game.is_trapped:
         ss.message = ("warn", "⚠️ TRAPPED — only the hidden word is left. "
@@ -624,7 +642,7 @@ def act_hint() -> None:
     h = game.hint(chooser=smart)
     if h:
         ss.hint_word = h
-        ss.message = ("ok", "🛟 The oracle whispers a *good* safe word — "
+        ss.message = ("ok", "💡 The oracle whispers a *good* safe word — "
                             "it keeps your options wide open.")
     else:
         ss.message = ("error", "No hint available.")
@@ -884,8 +902,13 @@ pre, code {
   font-family: "Twemoji Country Flags", "Source Code Pro", monospace;
 }
 /* rules popover: a tiny centered chip under the header */
-.st-key-rulesbar {margin:-4px 0 0 0;}
-.st-key-rulesbar [data-testid="stPopover"] {width:auto; margin:0 auto;}
+.st-key-rulesbar {margin:0;}
+.st-key-rulesbar [data-testid="stHorizontalBlock"] {
+  flex-wrap: nowrap !important; align-items: center;
+}
+.st-key-rulesbar [data-testid="stColumn"] {min-width: 0 !important;}
+.st-key-rulesbar [data-testid="stPopover"] {width:auto;}
+.st-key-rulesbar .dw-banner {text-align:left; margin:0;}
 .st-key-rulesbar [data-testid="stPopover"] button {
   font-size: 0.78rem;
   padding: 0.05rem 0.6rem;
@@ -914,33 +937,37 @@ section[data-testid="stSidebar"] h1 {
   font-size: 0.88rem;
   line-height: 1.35;
 }
-.block-container {max-width: 760px; padding-top: 3.2rem;}
-.dw-header {text-align:center; margin:-18px 0 0 0;}
+.block-container {max-width: 760px; padding-top: 3.6rem;
+                  padding-bottom: 1rem;}
+/* tighter rhythm between main-page elements so board + keyboard fit
+   one laptop screen without scrolling */
+.block-container > div > [data-testid="stVerticalBlock"] {gap: 0.45rem;}
+.dw-header {text-align:center; margin:0;}
 /* the Avoidle wordmark: game tiles spelling the name — AVOID on dark
    slate, LE on brand green, a thin red "do not cross" bar beneath */
 .dw-logo {display:inline-flex; gap:4px;}
-.dw-logo .lt {width:34px; height:34px; display:flex; align-items:center;
-              justify-content:center; border-radius:6px; font-weight:800;
-              font-size:1.25rem; color:#fff;
+.dw-logo .lt {width:29px; height:29px; display:flex; align-items:center;
+              justify-content:center; border-radius:5px; font-weight:800;
+              font-size:1.05rem; color:#fff;
               font-family:'Helvetica Neue',Arial,sans-serif;
               box-shadow:0 2px 5px rgba(0,0,0,0.45),
                          inset 0 1px 0 rgba(255,255,255,0.07);}
 .dw-logo .lt.d {background:linear-gradient(180deg,#3f3f42,#2e2e30);}
 .dw-logo .lt.g {background:linear-gradient(180deg,#62a35b,#4a7f44);}
-.dw-logo-bar {width:178px; height:3px; margin:4px auto 2px auto;
+.dw-logo-bar {width:152px; height:2px; margin:3px auto 1px auto;
               border-radius:2px;
               background:linear-gradient(90deg,transparent,#e74c3c 18%,
                                          #e74c3c 82%,transparent);}
-.dw-header p {margin:0 0 2px 0; opacity:0.6; font-size:0.78rem;
-              letter-spacing:0.26em; text-transform:uppercase;}
+.dw-header p {margin:0; opacity:0.55; font-size:0.68rem;
+              letter-spacing:0.24em; text-transform:uppercase;}
 .dw-banner {text-align:center; font-weight:700; font-size:1.0rem;
             margin:0 0 2px 0;}
 .dw-banner .sub {opacity:0.7; font-weight:400; font-size:0.9rem;}
-.dw-board {display:flex; flex-direction:column; gap:6px; align-items:center;
-           margin: 6px 0 4px 0;}
-.dw-row {display:flex; gap:6px;}
-.dw-tile {width:52px; height:52px; display:flex; align-items:center;
-          justify-content:center; font-size:1.7rem; font-weight:800;
+.dw-board {display:flex; flex-direction:column; gap:5px; align-items:center;
+           margin: 2px 0 2px 0;}
+.dw-row {display:flex; gap:5px;}
+.dw-tile {width:44px; height:44px; display:flex; align-items:center;
+          justify-content:center; font-size:1.45rem; font-weight:800;
           color:#fff; text-transform:uppercase; border-radius:6px;
           font-family:'Helvetica Neue',Arial,sans-serif;
           box-shadow:0 2px 6px rgba(0,0,0,0.35);}
@@ -958,8 +985,10 @@ section[data-testid="stSidebar"] h1 {
   100% {transform:rotateX(0deg); opacity:1;}
 }
 .dw-board.dw-shake {animation: dw-shake .4s ease;}
+.dw-more {font-size:0.7rem; opacity:0.5; letter-spacing:0.08em;
+          text-transform:uppercase; margin-top:2px;}
 .dw-row.dw-bot {position: relative; opacity: 0.92;}
-.dw-row.dw-bot::after {content: "🤖"; position: absolute; right: -26px;
+.dw-row.dw-bot::after {content: "👾"; position: absolute; right: -26px;
                        top: 50%; transform: translateY(-50%);
                        font-size: 0.85rem;}
 @keyframes dw-shake {
@@ -976,11 +1005,11 @@ section[data-testid="stSidebar"] h1 {
          box-shadow:0 1.5px 0 rgba(0,0,0,0.4);}
 .dw-counts {display:flex; justify-content:center; gap:38px;
             text-align:center; font-weight:700; margin:0 0 2px 0;}
-.dw-counts .lab {font-size:0.75rem; letter-spacing:0.1em; opacity:0.75;
+.dw-counts .lab {font-size:0.66rem; letter-spacing:0.09em; opacity:0.7;
                  text-transform:uppercase;}
-.dw-counts .num {font-size:1.9rem; line-height:1.15;}
-.dw-bar {height:7px; border-radius:4px; background:#262628;
-         margin:0 auto 2px auto; max-width:440px; overflow:hidden;}
+.dw-counts .num {font-size:1.45rem; line-height:1.1;}
+.dw-bar {height:5px; border-radius:3px; background:#262628;
+         margin:0 auto 0 auto; max-width:420px; overflow:hidden;}
 .dw-bar .dw-fill {height:100%; border-radius:4px;
                   transition:width .5s ease;}
 .dw-trapped {animation: dw-pulse 1s ease infinite;}
@@ -988,7 +1017,7 @@ section[data-testid="stSidebar"] h1 {
 .dw-footer {text-align:center; opacity:0.8; font-size:0.85rem;
             margin-top:18px;}
 @media (max-width: 480px) {
-  .dw-tile {width:44px; height:44px; font-size:1.4rem;}
+  .dw-tile {width:38px; height:38px; font-size:1.25rem;}
   .dw-row {gap:4px;}
   .dw-key {min-width:24px; height:34px; font-size:0.85rem;}
   .dw-logo .lt {width:27px; height:27px; font-size:1.0rem;}
@@ -1022,8 +1051,8 @@ section[data-testid="stSidebar"] h1 {
 .st-key-clickkbd .stButton > button {
   width: 100% !important;
   min-width: 0 !important;
-  height: 2.4rem;
-  min-height: 2.4rem;
+  height: 2.15rem;
+  min-height: 2.15rem;
   padding: 0 !important;
   font-weight: 600;
   font-size: 0.95rem;
@@ -1095,13 +1124,19 @@ def render_board(game: AvoidleGame, buffer: str = "",
         if duel and i % 2 == 1:
             cls += " dw-bot"
         rows.append(f'<div class="{cls}">{tiles}</div>')
-    for j in range(game.guesses_left):
+    # duel boards are 12 rows deep — grow as played instead of pushing
+    # the keyboard below the fold with a wall of empty tiles
+    empty_to_show = min(game.guesses_left, 2) if duel else game.guesses_left
+    for j in range(empty_to_show):
         cells = []
         for k in range(width):
             letter = buffer[k] if j == 0 and k < len(buffer) else ""
             cls = "dw-tile dw-empty" + (" dw-active" if j == 0 else "")
             cells.append(f'<div class="{cls}">{letter}</div>')
         rows.append(f'<div class="dw-row">{"".join(cells)}</div>')
+    hidden = game.guesses_left - empty_to_show
+    if hidden > 0:
+        rows.append(f'<div class="dw-more">+ {hidden} rows in reserve</div>')
     board_cls = "dw-board dw-shake" if shake else "dw-board"
     return f'<div class="{board_cls}">{"".join(rows)}</div>'
 
@@ -1297,9 +1332,6 @@ def main() -> None:
     game: AvoidleGame = ss.game
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(HEADER, unsafe_allow_html=True)
-    with st.container(key="rulesbar"):
-        with st.popover("❓ Rules"):
-            st.markdown(HOW_TO_MD)
 
     # ----- sidebar ----------------------------------------------------
     with st.sidebar:
@@ -1426,16 +1458,22 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
+    # ----- top bar: rules chip + mode banner share one compact row ----
+    with st.container(key="rulesbar"):
+        c_rules, c_banner = st.columns([1.3, 7.7])
+        with c_rules:
+            with st.popover("❓ Rules"):
+                st.markdown(HOW_TO_MD)
     # ----- header / survival banner (centered like everything else) ----
     if ss.mode == "survival":
-        st.markdown(
+        c_banner.markdown(
             f'<div class="dw-banner">⚔️ Round {ss.survival_round} · '
             f'run score {ss.survival_total} <span class="sub">· '
             f'{game.config.max_undos} undo(s) this round</span></div>',
             unsafe_allow_html=True)
     elif ss.mode == "duel" and not game.is_over:
         level_icon = BOT.BOT_LEVELS[ss.bot_level].split(" ")[0]
-        st.markdown(f'<div class="dw-banner">🤖 Duel vs {level_icon} '
+        c_banner.markdown(f'<div class="dw-banner">🆚 Duel vs {level_icon} '
                     f'{ss.bot_level.title()} <span class="sub">— whoever '
                     f'says the word loses · your move</span></div>',
                     unsafe_allow_html=True)
@@ -1454,8 +1492,8 @@ def main() -> None:
             quest = ACH.daily_quest(quest_date, ss.lang, ss.word_len)
             parts.append(f'<span class="sub">🎯 {quest.label} '
                          f'(+{quest.xp} XP)</span>')
-        st.markdown(f'<div class="dw-banner">{" · ".join(parts)}</div>',
-                    unsafe_allow_html=True)
+        c_banner.markdown(f'<div class="dw-banner">{" · ".join(parts)}</div>',
+                          unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
     buffer = ss.kbd_buffer if ss.input_mode == "click" else ""
@@ -1492,23 +1530,23 @@ def main() -> None:
                             f"{options}** playable words corner the bot "
                             "into saying the word — guaranteed win!")
                 else:
-                    st.warning(f"🧨 Endgame intel: none of your {options} "
+                    st.warning(f"💣 Endgame intel: none of your {options} "
                                "playable words corner the bot yet — "
                                "choose carefully.")
             elif traps == options:
                 escape = (" Undo while you can!" if game.can_undo()
                           else " Choose your last words well…")
-                st.warning(f"🧨 Endgame intel: **every one** of your "
+                st.warning(f"💣 Endgame intel: **every one** of your "
                            f"{options} playable words leads straight into "
                            f"a trap.{escape}")
             elif traps:
-                st.warning(f"🧨 Endgame intel: **{traps} of your {options}** "
+                st.warning(f"💣 Endgame intel: **{traps} of your {options}** "
                            "playable words lead straight into a trap.")
             else:
                 st.info(f"🛡️ Endgame intel: none of your {options} playable "
                         "words trap you on the next row.")
     if ss.hint_word and not game.is_over:
-        st.info(f"🛟 Safe word: **{ss.hint_word.upper()}**")
+        st.info(f"💡 Safe word: **{ss.hint_word.upper()}**")
     if ss.peek_words and not game.is_over:
         st.warning("👁️ " + " · ".join(w.upper() for w in ss.peek_words))
 
@@ -1541,7 +1579,7 @@ def main() -> None:
             actions.append((f"↩️ Undo {fmt(game.undos_left)}", act_undo,
                             not game.can_undo()))
         if game.config.max_hints > 0:
-            actions.append((f"🛟 Hint {fmt(game.hints_left)}", act_hint,
+            actions.append((f"💡 Hint {fmt(game.hints_left)}", act_hint,
                             game.hints_left <= 0))
         if game.config.max_peeks > 0:
             actions.append((f"👁️ Peek {fmt(game.peeks_left)}", act_peek,
@@ -1568,7 +1606,7 @@ def main() -> None:
             if ss.mode == "duel":
                 how = ("the bot said the word" if game.status is
                        GameStatus.WORDLED else "you outlasted it for 12 rows")
-                st.success(f"🤖💥 **You win the duel — {how}!** "
+                st.success(f"👾💥 **You win the duel — {how}!** "
                            f"Score: **{game_score(game, ss.mode)}**")
                 st.info(f"🔎 {_secret_reveal(game)}")
             elif game.status is GameStatus.SURVIVED:

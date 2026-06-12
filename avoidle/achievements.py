@@ -55,10 +55,10 @@ ACHIEVEMENTS: dict[str, tuple[Achievement, object]] = {
         (Achievement("purist", "🧘", "Purist",
                      "Win without undos, hints or peeks."),
          lambda c: c.won and c.undos + c.hints + c.peeks == 0),
-        (Achievement("daredevil", "🪂", "Daredevil",
+        (Achievement("daredevil", "🎢", "Daredevil",
                      "Win a game where only 2 words were left standing."),
          lambda c: c.won and c.min_pool_seen == 2),
-        (Achievement("houdini", "🪄", "Houdini",
+        (Achievement("houdini", "🎩", "Houdini",
                      "Get trapped — only the secret left — and still win."),
          lambda c: c.won and c.was_trapped),
         # thresholds tuned by simulation: Ghost ≈ 1% of wins ≈ 1 in 20

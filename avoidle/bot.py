@@ -21,7 +21,7 @@ from . import words as W
 BOT_LEVELS = {
     "easy": "😴 Easy — picks any playable word, blunders happily",
     "normal": "🤖 Normal — avoids the likeliest secrets",
-    "hard": "🧠 Hard — plays provably-safe words while they exist",
+    "hard": "♟️ Hard — plays provably-safe words while they exist",
 }
 
 #: score multiplier for duel wins, by opponent strength

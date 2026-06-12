@@ -36,8 +36,8 @@ toward the one word you must not say. Survive all your guesses and you win.
 **Daily Challenge** uses a deterministic word-of-the-day, so everyone on
 the planet fights the same word. **Survival** is an endless gauntlet:
 every round costs you an undo and raises the score multiplier — one loss
-ends the run. **🤖 Duel** is hot potato against a fair bot at three
-strengths — 😴 Easy, 🤖 Normal, 🧠 Hard (validated over 24,000 simulated
+ends the run. **🆚 Duel** is hot potato against a fair bot at three
+strengths — 😴 Easy, 🤖 Normal, ♟️ Hard (validated over 24,000 simulated
 duels: 59% / 42% / 36% player win rate for a naive player, 72% / 57% /
 50% for a skilled one; tougher bots pay bigger score multipliers).
 Every bot plays with public information only — it can genuinely
@@ -46,7 +46,7 @@ blunder into the secret.
 ## Abilities
 
 - **↩️ Undo** — take back your last guess, *even a fatal one*.
-- **🛟 Hint** — the oracle reveals a guaranteed-safe playable word.
+- **💡 Hint** — the oracle reveals a guaranteed-safe playable word.
 - **👁️ Peek** — gamble: see 5 of the remaining words… the hidden word may
   be among them.
 - **🎲 Random starting word** — a random opener, like the original
@@ -135,6 +135,17 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.17** — front-page fit & compatibility round: title no longer
+  clipped under Streamlit's toolbar; board, keyboard and abilities all
+  fit one laptop screen (compact 44px tiles, tighter rhythm, slimmer
+  counters/gauge, Rules chip shares a row with the mode banner); duel
+  boards grow as you play (2 upcoming rows + "+N in reserve") instead
+  of stacking 12 empty rows above the keyboard; emoji compatibility
+  sweep for older Windows fonts (🆚 Duel, 👾 bot, 💡 hint, ♟️ hard,
+  🎩/🎢 trophies, 💣 intel); and the hot-redeploy error class is closed
+  for good — app.py now version-checks the cached game modules and
+  evicts them on mismatch, so a cloud source update can never again mix
+  new app code with old module signatures.
 - **1.5.0.16** — three deep review rounds (2 agents + perf/simulation
   matrices + failure-injection chaos): the three crash-safety layers
   now share ONE reset helper (a render crash could permanently block
@@ -177,14 +188,14 @@ python -m pytest
   undos.
 - **1.5.0.12** — duel bots got a difficulty ladder: 😴 Easy (reckless,
   gravitates toward likely secrets), 🤖 Normal (dodges the likeliest
-  quartile), 🧠 Hard (plays provably-safe non-answer words while they
+  quartile), ♟️ Hard (plays provably-safe non-answer words while they
   exist); all fair — public info only. Balance validated over 24,000
   simulated duels (4,000 per cell, naive and skilled players); Easy
   re-tuned from 51% to 59% beginner win rate; win multipliers 1×/1.5×/
   2.5× by strength; selector in the sidebar restarts the duel fairly.
 - **1.5.0.11** — top-3 improvement round: 💾 automatic progress
   persistence (compressed browser cookie, auto-restored on fresh
-  sessions — streaks finally survive a page refresh); 🤖 Duel mode
+  sessions — streaks finally survive a page refresh); 🆚 Duel mode
   (alternate guesses vs a fair bot, whoever says the word loses;
   simulated 52% baseline player win rate, ~5 rows per duel); 📆 28-day
   daily-wins heatmap in the sidebar.
@@ -208,7 +219,7 @@ python -m pytest
 - **1.5.0.7** — 🕑 session recap in the sidebar (last games with
   outcome and score, practice replays included); share cards now carry
   your level and trophy count for extra bragging rights.
-- **1.5.0.6** — the oracle got smart: 🛟 hints now suggest the safest
+- **1.5.0.6** — the oracle got smart: 💡 hints now suggest the safest
   sampled word (keeps ~3.6× more words alive than a random safe word,
   measured over 25 positions); 🔥 streak-at-risk nudge in the sidebar
   when today's daily is still unplayed.
@@ -227,7 +238,7 @@ python -m pytest
   bonuses, near-death drama tracking (Houdini/Daredevil unlocks);
   thresholds tuned via 40-session bot simulation; progression persists
   through stats backup (backward-compatible format).
-- **1.5.0.3** — strategy intel: 🧨 endgame trap forecast (once ≤30 words
+- **1.5.0.3** — strategy intel: 💣 endgame trap forecast (once ≤30 words
   remain, see how many of your playable words lead straight into a
   trap — hidden in Impossible, where you're on your own); 🗒️ Zen word
   browser (study the whole remaining pool while practicing); daily
