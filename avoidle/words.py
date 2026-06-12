@@ -106,6 +106,8 @@ def daily_secret(lang: str = "en", length: int = WORD_LENGTH,
     pool = answers(lang, length)
     cum = _cumulative_weights(lang, length)
     # crc32 is stable across platforms and Python versions (hash() is not).
+    # the historical seed string is kept VERBATIM so daily words stay
+    # identical across the Avoidle rebrand — do not modernize it
     seed = f"dontwordle:{lang}:{length}:{date.isoformat()}"
     u = (zlib.crc32(seed.encode()) / 0xFFFFFFFF) * cum[-1]
     import bisect

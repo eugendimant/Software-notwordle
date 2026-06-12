@@ -135,6 +135,30 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.16** — three deep review rounds (2 agents + perf/simulation
+  matrices + failure-injection chaos): the three crash-safety layers
+  now share ONE reset helper (a render crash could permanently block
+  the next game's stats; redeploy healing leaked the old game's
+  hint/peek/banners); duel endgame intel was giving exactly inverted
+  advice (in duel, "trap" words corner the BOT — they're guaranteed
+  wins, now said so) and told undo-less modes to undo; duel share cards
+  showed score 0 and counted bot rows as your guesses (engine
+  share_text gained score/guesses overrides); mode/language/length
+  switches are atomic with rollback (a failed board build could leave
+  duel chrome — and bot replies! — on a daily board); analysis failures
+  degrade to a neutral rating instead of desyncing history; viewing
+  stats no longer creates empty entries; perf re-profiled (boot 0.2s,
+  guess 0.8s, 12 analyzers = 30MB) and balance matrices re-validated.
+- **1.5.0.15** — crash-proofing after a production incident (a redeploy
+  left live sessions holding old-module game objects whose exceptions
+  the new code couldn't catch by class identity): every callback is now
+  wrapped in a safety net that converts any exception into a friendly
+  message, stale session objects are detected and healed on rerun, and
+  a recovery shell replaces the crash page as a last resort — verified
+  by a 220-action chaos simulation injecting corrupt objects and
+  exploding internals (zero crashes). Also: fixed the accidental
+  monospace look (a wrong font fallback), tightened header/sidebar
+  spacing and centered the Rules chip.
 - **1.5.0.14** — 🚫 the game is now **AVOIDLE**: full rebrand (package,
   class names, UI, share cards, docs) with a professional tile wordmark
   (AVOID on slate, LE on green, red "do not cross" bar); loss verb is

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import functools
 import json
 import random
 import zlib
@@ -53,8 +54,8 @@ MODE_HELP = {
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
     "duel": "Hot potato vs the bot: you alternate guesses — whoever says "
-            "the hidden word LOSES. No undos. 12 rows, you go first. "
-            "Pick the bot's strength below the mode selector.",
+            "the hidden word LOSES. No undos, 1 peek. 12 rows, you go "
+            "first. Pick the bot's strength below the mode selector.",
     "hard": "6 guesses, only 2 undos, no hints, 1 peek. 1.5× score.",
     "impossible": "SEVEN guesses to survive, zero undos, zero help. 2.5× score.",
     "survival": "Endless gauntlet: each round you lose one undo. "
@@ -150,12 +151,41 @@ def init_state() -> None:
     ss.setdefault("celebrated", False)
     ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang:len"} counted
     ss.setdefault("daily_win_dates", set())  # daily WINS, for the heatmap
+    # self-heal after a redeploy: session objects created by an older
+    # version of the code (different class identity) are rebuilt
+    if "game" in ss and not isinstance(ss.game, AvoidleGame):
+        del ss["game"]
+        reset_game_view_state()
+        ss.message = ("ok", "✨ Avoidle was updated — fresh board, "
+                            "progress kept.")
+    if any(not isinstance(r, A.MoveRating) for r in ss.get("ratings", [])):
+        ss.ratings = []
+    if ss.get("review") and any(not isinstance(r, A.MoveRating)
+                                for r in ss.review):
+        ss.review = None
     if not ss.get("_cookie_checked"):
         ss._cookie_checked = True
         if not ss.stats and ss.xp == 0:   # only a truly fresh session
             restore_progress_from_cookie()
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
+
+
+def reset_game_view_state() -> None:
+    """Everything that belongs to ONE game's lifetime — used identically
+    by new-game, redeploy healing and crash recovery, so the three
+    safety layers can never disagree about what to reset."""
+    ss = st.session_state
+    ss.message = None
+    ss.hint_word = None
+    ss.peek_words = None
+    ss.recorded = False
+    ss.celebrated = False
+    ss.ratings = []
+    ss.review = None
+    ss.kbd_buffer = ""
+    ss.game_unlocks = []
+    ss.last_action = None
 
 
 def player_won(game: AvoidleGame, mode: str) -> bool:
@@ -309,9 +339,33 @@ def _ensure_state() -> None:
         init_state()
 
 
+def _safe(fn):
+    """No callback may ever crash the app. Catches everything our code
+    can raise — including exceptions from STALE session objects created
+    by a previous deploy, whose classes no longer match the freshly
+    imported ones (the except-clause misses them by identity)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if type(e).__module__.startswith("streamlit"):
+                raise  # never swallow Streamlit control flow
+            ss = st.session_state
+            if type(e).__name__ == "InvalidGuess":
+                ss["message"] = ("error", getattr(e, "reason", str(e)))
+                ss["last_action"] = "error"
+            else:
+                ss["message"] = ("error",
+                                 "⚠️ That move hiccuped — your progress is "
+                                 "safe. Try again or start a new game.")
+    return wrapper
+
+
 # ----------------------------------------------------------------------
 # Actions (widget callbacks)
 # ----------------------------------------------------------------------
+@_safe
 def act_new_game(next_round: bool = False) -> None:
     _ensure_state()
     ss = st.session_state
@@ -323,57 +377,54 @@ def act_new_game(next_round: bool = False) -> None:
             ss.survival_round = 1
             ss.survival_total = 0
     ss.game = _new_game(ss.mode)
-    ss.message = None
-    ss.hint_word = None
-    ss.peek_words = None
-    ss.recorded = False
-    ss.celebrated = False
-    ss.ratings = []
-    ss.review = None
-    ss.kbd_buffer = ""
+    reset_game_view_state()
     ss.guess_input = ""  # don't carry a typed word into the new game
-    ss.game_unlocks = []
     ss.last_action = "new"
 
 
-def act_change_bot() -> None:
-    _ensure_state()
+def _switch(setting: str, new_value, reset_survival: bool = True) -> None:
+    """Atomically change a game-defining setting: build the new board
+    first conceptually — on any failure, roll the setting back so the
+    UI never renders one mode's chrome over another mode's board."""
     ss = st.session_state
     record_result_if_final(force=True)
-    ss.bot_level = ss.bot_select
-    act_new_game()
+    prev = ss[setting]
+    ss[setting] = new_value
+    if reset_survival:
+        ss.survival_round = 1
+        ss.survival_total = 0
+    try:
+        act_new_game.__wrapped__()
+    except Exception:
+        ss[setting] = prev
+        raise
 
 
+@_safe
+def act_change_bot() -> None:
+    _ensure_state()
+    _switch("bot_level", st.session_state.bot_select)
+
+
+@_safe
 def act_change_mode() -> None:
     _ensure_state()
-    ss = st.session_state
-    record_result_if_final(force=True)  # attribute result to the old mode
-    ss.mode = MODES[ss.mode_label]
-    ss.survival_round = 1
-    ss.survival_total = 0
-    act_new_game()
+    _switch("mode", MODES[st.session_state.mode_label])
 
 
+@_safe
 def act_change_lang() -> None:
     _ensure_state()
-    ss = st.session_state
-    record_result_if_final(force=True)  # attribute result to the old language
-    ss.lang = ss.lang_select
-    ss.survival_round = 1
-    ss.survival_total = 0
-    act_new_game()
+    _switch("lang", st.session_state.lang_select)
 
 
+@_safe
 def act_change_len() -> None:
     _ensure_state()
-    ss = st.session_state
-    record_result_if_final(force=True)  # attribute result to the old length
-    ss.word_len = ss.len_select
-    ss.survival_round = 1
-    ss.survival_total = 0
-    act_new_game()
+    _switch("word_len", st.session_state.len_select)
 
 
+@_safe
 def act_change_input() -> None:
     _ensure_state()
     ss = st.session_state
@@ -381,12 +432,14 @@ def act_change_input() -> None:
     ss.kbd_buffer = ""
 
 
+@_safe
 def act_submit() -> None:
     _ensure_state()
     word = st.session_state.get("guess_input", "").strip().lower()
     _process_guess(word, clear_input=True)
 
 
+@_safe
 def act_key(letter: str) -> None:
     _ensure_state()
     ss = st.session_state
@@ -394,12 +447,14 @@ def act_key(letter: str) -> None:
         ss.kbd_buffer += letter
 
 
+@_safe
 def act_backspace() -> None:
     _ensure_state()
     ss = st.session_state
     ss.kbd_buffer = ss.kbd_buffer[:-1]
 
 
+@_safe
 def act_kbd_enter() -> None:
     _ensure_state()
     ss = st.session_state
@@ -408,6 +463,7 @@ def act_kbd_enter() -> None:
         ss.kbd_buffer = ""
 
 
+@_safe
 def act_accept_fate() -> None:
     """Trapped with no way out — play the only word left and take the L."""
     _ensure_state()
@@ -434,11 +490,21 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     # BEFORE any bot reply changes the board
     # (same seed/sample as act_review so live and review grades agree)
     row = game.guesses_made - 1
-    ss.ratings.append(A.rate_move(
-        A.analyzer_for(ss.lang, game.word_length), word,
-        game.pool_before(row), game.secret,
-        rng=random.Random(f"{game.secret}:{row}"), sample_size=400,
-        actual_retained=game.remaining_count))
+    try:
+        rating = A.rate_move(
+            A.analyzer_for(ss.lang, game.word_length), word,
+            game.pool_before(row), game.secret,
+            rng=random.Random(f"{game.secret}:{row}"), sample_size=400,
+            actual_retained=game.remaining_count)
+    except Exception:
+        # the move already happened — never let analysis failure desync
+        # ratings/history or block recording; degrade to a neutral rating
+        rating = A.MoveRating(
+            word=word, retained=game.remaining_count,
+            pool_size=len(game.pool_before(row)), percentile=50.0,
+            best_word=word, best_retained=game.remaining_count,
+            exact=False)
+    ss.ratings.append(rating)
     ss.hint_word = None
     ss.peek_words = None
     if game.status is GameStatus.WORDLED:
@@ -449,8 +515,11 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
         ss.message = ("win", "🎉 You SURVIVED! You never said the word.")
     elif ss.mode == "duel":
         # the bot answers immediately — and may blunder into the secret
-        bot_word = BOT.bot_pick(ss.bot_level, game.remaining_words,
-                                ss.lang, game.word_length, game.rng)
+        try:
+            bot_word = BOT.bot_pick(ss.bot_level, game.remaining_words,
+                                    ss.lang, game.word_length, game.rng)
+        except Exception:
+            bot_word = game.rng.choice(game.remaining_words)
         game.submit(bot_word)
         if game.status is GameStatus.WORDLED:
             ss.message = ("win", f"🤖 The bot said “{bot_word.upper()}” — "
@@ -480,6 +549,7 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     record_result_if_final()
 
 
+@_safe
 def act_random_start() -> None:
     """Fill the box with a random opening word (first guess only, like the
     original's 'Random Starting Word'). Mid-game randomness could land on
@@ -498,11 +568,12 @@ def act_random_start() -> None:
             ss.guess_input = word
 
 
+@_safe
 def act_undo() -> None:
     _ensure_state()
     ss = st.session_state
-    ss.last_action = "undo"
     if ss.game.undo():
+        ss.last_action = "undo"
         ss.message = ("ok", "↩️ Guess taken back. Choose more carefully…")
         if ss.ratings:
             ss.ratings.pop()
@@ -513,6 +584,7 @@ def act_undo() -> None:
         ss.message = ("error", "No undos available.")
 
 
+@_safe
 def act_review() -> None:
     """Post-game: find the best word for every row (exact where feasible)."""
     _ensure_state()
@@ -538,6 +610,7 @@ def _reseed_daily_rng(facility: str) -> None:
                          f":{facility}:{ss.game.guesses_made}")
 
 
+@_safe
 def act_hint() -> None:
     _ensure_state()
     ss = st.session_state
@@ -557,6 +630,7 @@ def act_hint() -> None:
         ss.message = ("error", "No hint available.")
 
 
+@_safe
 def act_peek() -> None:
     _ensure_state()
     ss = st.session_state
@@ -649,10 +723,17 @@ def save_progress_cookie() -> None:
     token = encode_progress()
     if len(token) > 3800:   # stay under the 4 KB cookie ceiling
         return
-    components.html(
-        f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
-        "max-age=31536000; path=/; SameSite=Lax';</script>",
-        height=0)
+    try:
+        # components.html is deprecated but its replacement (st.iframe)
+        # cannot run inline scripts on the app origin; if a future
+        # Streamlit removes it, persistence degrades gracefully instead
+        # of crashing (the backup file always works).
+        components.html(
+            f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
+            "max-age=31536000; path=/; SameSite=Lax';</script>",
+            height=0)
+    except Exception:
+        pass
 
 
 def restore_progress_from_cookie() -> bool:
@@ -787,16 +868,24 @@ CSS = """
                  U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
   font-display: swap;
 }
+/* Sans text elements get the flag font FIRST in the stack — it only
+   claims flag codepoints (unicode-range), everything else falls through
+   to the app's normal sans font. Never list a monospace fallback here:
+   Streamlit preloads Source Code Pro, and a wrong fallback order turns
+   the whole UI into typewriter text. */
 [data-baseweb="select"] div, [role="listbox"] li, [role="option"],
 [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
 [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p,
-.dw-banner, .dw-footer, pre, code {
-  font-family: "Twemoji Country Flags", "Source Sans Pro", "Source Code Pro",
-               sans-serif;
+.dw-banner, .dw-footer {
+  font-family: "Twemoji Country Flags", "Source Sans", "Source Sans Pro",
+               "Source Sans 3", sans-serif;
+}
+pre, code {
+  font-family: "Twemoji Country Flags", "Source Code Pro", monospace;
 }
 /* rules popover: a tiny centered chip under the header */
-.st-key-rulesbar {display:flex; justify-content:center; margin:-6px 0 2px 0;}
-.st-key-rulesbar [data-testid="stPopover"] {width:auto;}
+.st-key-rulesbar {margin:-4px 0 0 0;}
+.st-key-rulesbar [data-testid="stPopover"] {width:auto; margin:0 auto;}
 .st-key-rulesbar [data-testid="stPopover"] button {
   font-size: 0.78rem;
   padding: 0.05rem 0.6rem;
@@ -813,13 +902,20 @@ CSS = """
 .dw-heat .today {outline:1.5px solid #b59f3b;}
 .dw-heat-lab {text-align:center; font-size:0.72rem; opacity:0.7;
               letter-spacing:0.08em; text-transform:uppercase;}
+/* sidebar: tighter vertical rhythm */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+  gap: 0.65rem;
+}
+section[data-testid="stSidebar"] h1 {
+  font-size: 1.45rem; padding-bottom: 0;
+}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
   font-size: 0.88rem;
   line-height: 1.35;
 }
-.block-container {max-width: 720px;}
-.dw-header {text-align:center; margin:-10px 0 2px 0;}
+.block-container {max-width: 760px; padding-top: 3.2rem;}
+.dw-header {text-align:center; margin:-18px 0 0 0;}
 /* the Avoidle wordmark: game tiles spelling the name — AVOID on dark
    slate, LE on brand green, a thin red "do not cross" bar beneath */
 .dw-logo {display:inline-flex; gap:4px;}
@@ -831,17 +927,17 @@ CSS = """
                          inset 0 1px 0 rgba(255,255,255,0.07);}
 .dw-logo .lt.d {background:linear-gradient(180deg,#3f3f42,#2e2e30);}
 .dw-logo .lt.g {background:linear-gradient(180deg,#62a35b,#4a7f44);}
-.dw-logo-bar {width:178px; height:3px; margin:5px auto 3px auto;
+.dw-logo-bar {width:178px; height:3px; margin:4px auto 2px auto;
               border-radius:2px;
               background:linear-gradient(90deg,transparent,#e74c3c 18%,
                                          #e74c3c 82%,transparent);}
-.dw-header p {margin:0; opacity:0.65; font-size:0.85rem;
-              letter-spacing:0.28em; text-transform:uppercase;}
-.dw-banner {text-align:center; font-weight:700; font-size:1.05rem;
-            margin:2px 0 6px 0;}
+.dw-header p {margin:0 0 2px 0; opacity:0.6; font-size:0.78rem;
+              letter-spacing:0.26em; text-transform:uppercase;}
+.dw-banner {text-align:center; font-weight:700; font-size:1.0rem;
+            margin:0 0 2px 0;}
 .dw-banner .sub {opacity:0.7; font-weight:400; font-size:0.9rem;}
 .dw-board {display:flex; flex-direction:column; gap:6px; align-items:center;
-           margin: 10px 0 4px 0;}
+           margin: 6px 0 4px 0;}
 .dw-row {display:flex; gap:6px;}
 .dw-tile {width:52px; height:52px; display:flex; align-items:center;
           justify-content:center; font-size:1.7rem; font-weight:800;
@@ -878,8 +974,8 @@ CSS = """
          font-weight:700; font-size:0.95rem; color:#fff;
          background:#818384; text-transform:uppercase;
          box-shadow:0 1.5px 0 rgba(0,0,0,0.4);}
-.dw-counts {display:flex; justify-content:center; gap:34px;
-            text-align:center; font-weight:700; margin-bottom:4px;}
+.dw-counts {display:flex; justify-content:center; gap:38px;
+            text-align:center; font-weight:700; margin:0 0 2px 0;}
 .dw-counts .lab {font-size:0.75rem; letter-spacing:0.1em; opacity:0.75;
                  text-transform:uppercase;}
 .dw-counts .num {font-size:1.9rem; line-height:1.15;}
@@ -1123,7 +1219,7 @@ def show_message() -> None:
     if st.session_state.game.is_over and kind in ("win", "loss"):
         return
     {"error": st.error, "warn": st.warning, "win": st.success,
-     "loss": st.error, "ok": st.info}[kind](text)
+     "loss": st.error, "ok": st.info}.get(kind, st.info)(text)
 
 
 TRAP_FORECAST_LIMIT = 30
@@ -1182,7 +1278,9 @@ def share_title() -> str:
     if ss.word_len != 5:
         tag += f" ({ss.word_len} letters)"
     if ss.mode == "daily":
-        return f"Avoidle Daily {datetime.date.today().isoformat()}{tag}"
+        day = (ss.get("daily_key") or datetime.date.today().isoformat()
+               ).split(":")[0]
+        return f"Avoidle Daily {day}{tag}"
     if ss.mode == "survival":
         return f"Avoidle Survival R{ss.survival_round}{tag}"
     return f"Avoidle {ss.game.config.label}{tag}"
@@ -1257,7 +1355,10 @@ def main() -> None:
 
         st.divider()
         st.subheader("📊 Your stats")
-        stats = mode_stats(ss.mode)
+        stats = ss.stats.get(
+            f"{ss.mode}:{ss.lang}:{ss.word_len}",
+            {"played": 0, "survived": 0, "streak": 0,
+             "best_streak": 0, "best_score": 0})
         c1, c2 = st.columns(2)
         c1.metric("Played", stats["played"])
         rate = (stats["survived"] / stats["played"] * 100
@@ -1383,10 +1484,23 @@ def main() -> None:
         forecast = trap_forecast(game)
         if forecast:
             traps, options = forecast
-            if traps == options:
+            if ss.mode == "duel":
+                # a "trap" leaves only the secret — for the BOT, which
+                # must then say it: those words are guaranteed wins
+                if traps:
+                    st.info(f"🎯 Endgame intel: **{traps} of your "
+                            f"{options}** playable words corner the bot "
+                            "into saying the word — guaranteed win!")
+                else:
+                    st.warning(f"🧨 Endgame intel: none of your {options} "
+                               "playable words corner the bot yet — "
+                               "choose carefully.")
+            elif traps == options:
+                escape = (" Undo while you can!" if game.can_undo()
+                          else " Choose your last words well…")
                 st.warning(f"🧨 Endgame intel: **every one** of your "
                            f"{options} playable words leads straight into "
-                           "a trap. Undo while you can!")
+                           f"a trap.{escape}")
             elif traps:
                 st.warning(f"🧨 Endgame intel: **{traps} of your {options}** "
                            "playable words lead straight into a trap.")
@@ -1480,7 +1594,11 @@ def main() -> None:
         for note in ss.game_unlocks:
             st.success(note)
         lv = ACH.level_for_xp(ss.xp)
-        share_block = (game.share_text(share_title(), won=won)
+        player_rows = ((game.guesses_made + 1) // 2
+                       if ss.mode == "duel" else None)
+        share_block = (game.share_text(share_title(), won=won,
+                                       score=game_score(game, ss.mode),
+                                       guesses=player_rows)
                        + f"\n⭐ Level {lv['level']} {lv['title']} · "
                          f"🏆 {len(ss.achievements)}/{len(ACH.ACHIEVEMENTS)}")
         st.code(share_block, language=None)
@@ -1542,6 +1660,27 @@ def main() -> None:
     ss.last_action = None
 
 
+def _run_protected() -> None:
+    """Last line of defense: a render error shows a friendly recovery
+    panel instead of Streamlit's crash page. Streamlit's own control-flow
+    exceptions pass through untouched."""
+    try:
+        main()
+    except Exception as e:
+        if type(e).__module__.startswith("streamlit"):
+            raise
+        st.error("⚠️ Something went wrong while drawing the page — your "
+                 "progress is safe.")
+        ss = st.session_state
+        ss.pop("game", None)
+        try:
+            reset_game_view_state()
+        except Exception:
+            pass
+        if st.button("🔄 Restart the board", type="primary"):
+            pass  # state cleared above; the rerun rebuilds everything
+
+
 # run under `streamlit run` / AppTest, but stay importable for unit tests
 if __name__ == "__main__" or st.runtime.exists():
-    main()
+    _run_protected()
