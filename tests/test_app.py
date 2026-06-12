@@ -840,6 +840,58 @@ def test_duel_context_counts_player_tiles_only():
         assert len(review) == player_rows
 
 
+def test_callbacks_never_crash_even_on_foreign_exceptions():
+    """Reproduces the production crash: after a redeploy, the session's
+    game object raises an InvalidGuess from the OLD module — a class the
+    new except-clause can't catch by identity. No callback may ever let
+    any exception escape."""
+    at = make_app()
+    game = at.session_state["game"]
+
+    class LegacyInvalidGuess(Exception):  # foreign exception class
+        def __init__(self, reason):
+            super().__init__(reason)
+            self.reason = reason
+    LegacyInvalidGuess.__name__ = "InvalidGuess"
+
+    def exploding_submit(word):
+        raise LegacyInvalidGuess("legacy reason text")
+    game.submit = exploding_submit
+    guess(at, "stone")  # asserts not at.exception internally
+    assert at.session_state["message"][0] == "error"
+    assert "legacy reason" in at.session_state["message"][1]
+
+    def truly_broken(word):
+        raise RuntimeError("totally unexpected")
+    at.session_state["game"].submit = truly_broken
+    at.text_input(key="guess_input").input("brick")
+    button(at, "Guess").click()
+    at.run()
+    assert not at.exception            # survived an arbitrary explosion
+    assert "hiccuped" in at.session_state["message"][1]
+
+
+def test_stale_game_object_is_healed_on_rerun():
+    """A session that survived a redeploy may hold a game whose class no
+    longer exists — the app must rebuild it instead of crashing."""
+    at = make_app()
+
+    class NotAGame:                     # simulates an old-module instance
+        status = None
+    at.session_state["game"] = NotAGame()
+    at.session_state["ratings"] = [object()]   # stale ratings too
+    at.run()
+    assert not at.exception
+    from avoidle.engine import AvoidleGame
+    assert isinstance(at.session_state["game"], AvoidleGame)
+    assert at.session_state["ratings"] == []
+    # and the rebuilt board is playable immediately
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    assert at.session_state["game"].guesses_made == 1
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret

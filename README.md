@@ -135,6 +135,16 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.15** — crash-proofing after a production incident (a redeploy
+  left live sessions holding old-module game objects whose exceptions
+  the new code couldn't catch by class identity): every callback is now
+  wrapped in a safety net that converts any exception into a friendly
+  message, stale session objects are detected and healed on rerun, and
+  a recovery shell replaces the crash page as a last resort — verified
+  by a 220-action chaos simulation injecting corrupt objects and
+  exploding internals (zero crashes). Also: fixed the accidental
+  monospace look (a wrong font fallback), tightened header/sidebar
+  spacing and centered the Rules chip.
 - **1.5.0.14** — 🚫 the game is now **AVOIDLE**: full rebrand (package,
   class names, UI, share cards, docs) with a professional tile wordmark
   (AVOID on slate, LE on green, red "do not cross" bar); loss verb is
