@@ -538,7 +538,8 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
             word=word, retained=game.remaining_count,
             pool_size=len(game.pool_before(row)), percentile=50.0,
             best_word=word, best_retained=game.remaining_count,
-            exact=False)
+            exact=False, fatal=word == game.secret,
+            forced=len(game.pool_before(row)) == 1)
     ss.ratings.append(rating)
     ss.hint_word = None
     ss.peek_words = None
@@ -1053,9 +1054,14 @@ section[data-testid="stSidebar"] h1 {
 .dw-rail b {font-size:0.73rem;}
 .dw-rail-new {animation: dw-rail-in .4s ease .6s both;}
 @keyframes dw-rail-in {from {opacity:0;} to {opacity:0.85;}}
-/* phones: no side space — the verdict line under the keyboard returns */
+/* no side space, no rail — the verdict line under the keyboard returns.
+   The space that matters is the MAIN PANE's (the sidebar steals ~340px
+   when open), so the toggle is a container query on the content column;
+   the media query is the safety net for phones on older browsers. */
+.block-container {container-type: inline-size;}
 @media (max-width: 620px) {.dw-rail {display:none;}}
-@media (min-width: 621px) {.dw-substatus {display:none;}}
+@container (width < 640px) {.dw-rail {display:none;}}
+@container (width >= 640px) {.dw-substatus {display:none;}}
 .dw-tile {width:44px; height:44px; display:flex; align-items:center;
           justify-content:center; font-size:1.45rem; font-weight:800;
           color:#fff; text-transform:uppercase; border-radius:6px;
@@ -1656,7 +1662,10 @@ def main() -> None:
                                   "reading the board",
                                   "narrowing it down"])
             delay = random.uniform(0.9, 1.7)
-        delay *= float(ss.get("bot_pace", 1.0))   # tests set pace to 0
+        try:   # tests set pace to 0; a stray value must never crash
+            delay = max(0.0, delay * float(ss.get("bot_pace", 1.0)))
+        except (TypeError, ValueError):
+            pass
         st.markdown(
             f'<div class="dw-status ok dw-think">👾 {verb}'
             '<span>.</span><span>.</span><span>.</span></div>'
