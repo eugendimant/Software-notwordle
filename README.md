@@ -37,11 +37,16 @@ toward the one word you must not say. Survive all your guesses and you win.
 the planet fights the same word. **Survival** is an endless gauntlet:
 every round costs you an undo and raises the score multiplier — one loss
 ends the run. **🆚 Duel** is hot potato against a fair bot at three
-strengths — 😴 Easy, 🤖 Normal, ♟️ Hard (validated over 24,000 simulated
-duels: 59% / 42% / 36% player win rate for a naive player, 72% / 57% /
-50% for a skilled one; tougher bots pay bigger score multipliers).
-Every bot plays with public information only — it can genuinely
-blunder into the secret.
+strengths — 😴 Easy, 🤖 Normal, ♟️ Hard. Every bot plays with public
+information only (it can genuinely blunder into the secret), but **Hard
+reasons recursively**: once the playable pool is small it *solves* the
+duel by backward induction — "if I play X, you're forced to play Y, so
+I play Z…" — searching the full alternating game tree to find a move
+that corners you. It doesn't know the secret, so it runs that minimax
+across its belief about which word is hidden. Measured over 24,000
+simulated duels: a skilled player who broke even against the old
+heuristic Hard bot (50%) now wins just **40%** against the recursive
+one (naive players 36% → 30%); tougher bots pay bigger multipliers.
 
 ## Abilities
 
@@ -119,6 +124,7 @@ avoidle/
   words.py      word lists, daily/random secrets
   simulate.py   self-play balance harness (python -m avoidle.simulate)
   analysis.py   numpy-vectorized move-quality analyzer
+  endgame.py    recursive backward-induction duel solver
   data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
 tests/          120+ tests: engine, analysis, meta-game, self-play, AppTest UI
@@ -135,6 +141,16 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.1.0** — recursive reasoning: the Hard duel bot now *solves* the
+  endgame by backward induction (minimax over the full alternating game
+  tree) instead of a one-step heuristic — it reasons several moves ahead
+  ("if I play X you're forced to Y…") across its belief about the hidden
+  word, staying fair (it never sees the secret). New `avoidle/endgame.py`
+  with an independent naive-minimax cross-check; the bot got measurably
+  stronger (skilled players 50% → 40%, naive 36% → 30% over 24k duels)
+  at 1–2 ms per move. Surfaced in-game: Hard "solves the endgame…" while
+  thinking, and the post-game review shows the recursive "forced win"
+  debrief.
 - **1.5.0.18** — professional UX calm pass: one compact centered status
   line under the keyboard replaces stacked full-width alert boxes (the
   trapped state was being announced three times at once); move ratings
