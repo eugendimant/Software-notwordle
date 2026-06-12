@@ -69,7 +69,8 @@ HOW_TO_MD = (
     "re-used (elsewhere), ⬜ is forbidden.\n"
     "- The clue rules shrink the pool of playable words, pushing you "
     "toward the answer. **Survive every guess to win.**\n"
-    "- **↩️ Undo** takes back a guess — even a fatal one. **🛟 Hint** "
+    "- **↩️ Undo** takes back a guess — even a fatal one (no undos "
+    "in 🤖 Duel). **🛟 Hint** "
     "reveals a safe word. **👁️ Peek** shows remaining words (risky!).\n"
     "- Secrets are **frequency-weighted**: if the clues fit two words, "
     "suspect the common one.\n"
@@ -177,9 +178,8 @@ def duel_score(game: DontWordleGame) -> int:
 
 
 def game_score(game: DontWordleGame, mode: str) -> int:
-    if (mode == "duel" and player_won(game, mode)
-            and game.status is GameStatus.WORDLED):
-        return duel_score(game)
+    if mode == "duel":
+        return duel_score(game) if player_won(game, mode) else 0
     return game.score()
 
 
@@ -240,15 +240,18 @@ def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
     if won:
         ss.wins_langs.add(ss.lang)
         ss.wins_lengths.add(ss.word_len)
-    greens = sum(t.feedback.count(GREEN) for t in game.history)
-    yellows = sum(t.feedback.count(YELLOW) for t in game.history)
+    # in duel, only the PLAYER's rows count toward achievements
+    rows = game.history[0::2] if ss.mode == "duel" else game.history
+    greens = sum(t.feedback.count(GREEN) for t in rows)
+    yellows = sum(t.feedback.count(YELLOW) for t in rows)
     return ACH.GameContext(
         mode=ss.mode, lang=ss.lang, length=ss.word_len,
         won=won, score=game_score(game, ss.mode),
         undos=game.undos_used, hints=game.hints_used, peeks=game.peeks_used,
         greens=greens, yellows=yellows,
         min_pool_seen=game.min_pool_seen, final_pool=game.remaining_count,
-        was_trapped=game.was_ever_trapped,
+        # in duel a winning trap was necessarily the BOT's, not yours
+        was_trapped=game.was_ever_trapped and ss.mode != "duel",
         survival_round=ss.survival_round, streak=stats["streak"],
         total_wins=sum(s["survived"] for s in ss.stats.values()),
         rating_percentiles=[r.percentile for r in ss.ratings],
@@ -516,11 +519,12 @@ def act_review() -> None:
     ss = st.session_state
     game: DontWordleGame = ss.game
     az = A.analyzer_for(ss.lang, game.word_length)
+    step = 2 if ss.mode == "duel" else 1   # skip bot rows in duel
     ss.review = [
         A.rate_move(az, t.guess, game.pool_before(i), game.secret,
                     rng=random.Random(f"{game.secret}:{i}"), sample_size=400,
                     actual_retained=len(game.pool_before(i + 1)))
-        for i, t in enumerate(game.history)
+        for i, t in list(enumerate(game.history))[::step]
     ]
 
 
@@ -586,18 +590,40 @@ def export_stats_json(compact: bool = False) -> str:
     return json.dumps(payload, indent=2)
 
 
+def _recent(dated_keys: set, days: int) -> list:
+    """Keep only entries whose date part is within the last ``days``."""
+    floor = (datetime.date.today()
+             - datetime.timedelta(days=days)).isoformat()
+    return sorted(k for k in dated_keys if k.split(":")[0] >= floor)
+
+
 def encode_progress() -> str:
-    """Progress as a cookie-safe token (zlib + url-safe base64)."""
-    raw = export_stats_json(compact=True).encode()
+    """Progress as a cookie-safe token (zlib + url-safe base64).
+    Daily history is pruned to what the app actually needs (today's
+    replay guard + the 28-day heatmap window) so the token stays well
+    under the 4 KB cookie ceiling for years; the downloadable backup
+    file keeps the full history."""
+    ss = st.session_state
+    payload = {"app": "dontwordle", "version": __version__,
+               "stats": ss.stats, "survival_best": ss.survival_best,
+               "xp": ss.xp,
+               "achievements": sorted(ss.achievements),
+               "daily_streaks": ss.daily_streaks,
+               "daily_done": _recent(ss.daily_done, 30),
+               "daily_win_dates": _recent(ss.daily_win_dates, 56)}
+    raw = json.dumps(payload, separators=(",", ":")).encode()
     return base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode()
 
 
 def decode_progress(token: str) -> dict | None:
-    """Token -> validated payload (None on any tampering/corruption)."""
+    """Token -> validated payload (None on any tampering/corruption).
+    Decompression is hard-capped at 1 MB via decompressobj — a zlib
+    bomb stops mid-stream instead of ballooning into memory."""
     try:
-        raw = zlib.decompress(base64.urlsafe_b64decode(token.encode()),
-                              bufsize=1 << 16)
-        if len(raw) > 1 << 20:
+        data = base64.urlsafe_b64decode(token.encode())
+        d = zlib.decompressobj()
+        raw = d.decompress(data, 1 << 20)
+        if d.unconsumed_tail:   # output exceeded the cap: reject
             return None
     except Exception:
         return None
@@ -1410,7 +1436,13 @@ def main() -> None:
             if not ss.celebrated:
                 st.balloons()
                 ss.celebrated = True
-            if game.status is GameStatus.SURVIVED:
+            if ss.mode == "duel":
+                how = ("the bot said the word" if game.status is
+                       GameStatus.WORDLED else "you outlasted it for 12 rows")
+                st.success(f"🤖💥 **You win the duel — {how}!** "
+                           f"Score: **{game_score(game, ss.mode)}**")
+                st.info(f"🔎 {_secret_reveal(game)}")
+            elif game.status is GameStatus.SURVIVED:
                 bd = game.score_breakdown()
                 st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
                 st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
@@ -1421,10 +1453,6 @@ def main() -> None:
                            f"points − {bd['penalties']} help penalties, "
                            f"× {bd['multiplier']:g} {game.config.label} "
                            f"bonus{floor_note}")
-            else:  # duel won by the bot's blunder
-                st.success(f"🤖💥 **The bot said the word — you win the "
-                           f"duel!** Score: **{game_score(game, ss.mode)}**")
-                st.info(f"🔎 {_secret_reveal(game)}")
         else:
             st.error(f"💀 **You Wordled.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
@@ -1451,7 +1479,9 @@ def main() -> None:
                 st.button("Analyze my game", on_click=act_review,
                           type="secondary")
             else:
-                for i, (t, r) in enumerate(zip(game.history, ss.review), 1):
+                rows = (game.history[0::2] if ss.mode == "duel"
+                        else game.history)
+                for i, (t, r) in enumerate(zip(rows, ss.review), 1):
                     approx = "" if r.exact else " (best found by sampling)"
                     if r.fatal and r.forced:
                         verdict = "**no way out — it was the only word left**"

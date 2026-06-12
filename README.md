@@ -135,6 +135,16 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.13** — thorough review round (2 agents): real zlib-bomb cap
+  on backup/cookie decoding (the old guard was ineffective — a 3KB
+  upload could balloon to 200MB); duel fairness fixes: the bot's tiles
+  no longer count toward your achievements/score, the best-move review
+  covers only your rows, 12-row outlast wins now pay the bot-level
+  multiplier, and Houdini can't unlock off the bot's trap; cookie
+  history pruned to what the app needs so persistence never silently
+  stops for long-term players; duel balance reproducible via
+  `python -m dontwordle.simulate duel`; rules text notes Duel has no
+  undos.
 - **1.5.0.12** — duel bots got a difficulty ladder: 😴 Easy (reckless,
   gravitates toward likely secrets), 🤖 Normal (dodges the likeliest
   quartile), 🧠 Hard (plays provably-safe non-answer words while they

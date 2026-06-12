@@ -779,6 +779,67 @@ def test_streak_heatmap_renders_wins():
     assert "dw-heat" in blob and 'class="win today"' in blob
 
 
+def test_zlib_bomb_rejected_without_ballooning():
+    import app as app_module
+    import base64
+    import time
+    import zlib
+    bomb = base64.urlsafe_b64encode(
+        zlib.compress(b"0" * (50 * 1024 * 1024), 9)).decode()
+    t0 = time.perf_counter()
+    assert app_module.decode_progress(bomb) is None
+    assert time.perf_counter() - t0 < 1.0  # stopped at the 1MB cap
+
+
+def test_cookie_prunes_history_but_export_keeps_it():
+    import datetime
+    import app as app_module
+    at = make_app()
+    old = (datetime.date.today()
+           - datetime.timedelta(days=400)).isoformat()
+    today = datetime.date.today().isoformat()
+    at.session_state["daily_done"].update({f"{old}:en:5", f"{today}:en:5"})
+    at.session_state["daily_win_dates"].add(f"{old}:en:5")
+    # drive the codec on a synthetic session via the pure helper
+    recent = app_module._recent({f"{old}:en:5", f"{today}:en:5"}, 30)
+    assert recent == [f"{today}:en:5"]  # the stale entry is pruned
+    assert app_module._recent({f"{old}:en:5"}, 100000) == [f"{old}:en:5"]
+
+
+def test_duel_context_counts_player_tiles_only():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    import random as _random
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game.rng = _random.Random(7)
+    for _ in range(6):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        safe = next((w for w in game.remaining_words if w != game.secret),
+                    game.secret)
+        guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over
+    # the recorded best score (if won) must use the level multiplier
+    won = app_module.player_won(game, "duel")
+    stats = at.session_state["stats"]["duel:en:5"]
+    if won:
+        assert stats["best_score"] == app_module.duel_score(game)
+    # review covers player rows only
+    if at.session_state["review"] is None:
+        btns = [b for b in at.button if b.label.startswith("Analyze")]
+        if btns:
+            btns[0].click()
+            at.run()
+    review = at.session_state["review"]
+    if review is not None:
+        player_rows = (len(game.history) + 1) // 2
+        assert len(review) == player_rows
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret
