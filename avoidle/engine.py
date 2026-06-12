@@ -1,4 +1,5 @@
-"""Pure game logic for Don't Wordle. No UI dependencies — fully testable.
+"""Pure game logic for Avoidle (the anti word-guessing game).
+No UI dependencies — fully testable.
 
 Rules (mirroring dontwordle.com):
   * The player makes up to ``max_guesses`` guesses and must NEVER guess
@@ -110,7 +111,7 @@ class TurnRecord:
 
 
 @dataclass
-class DontWordleGame:
+class AvoidleGame:
     secret: str
     dictionary: frozenset[str]
     config: GameConfig = field(default_factory=GameConfig)
@@ -323,14 +324,14 @@ class DontWordleGame:
 
     EMOJI = {GREEN: "🟩", YELLOW: "🟨", GRAY: "⬜"}
 
-    def share_text(self, title: str = "Don't Wordle",
+    def share_text(self, title: str = "Avoidle",
                    won: bool | None = None) -> str:
         """Emoji result card. ``won`` overrides the outcome line for modes
         with their own win semantics (e.g. duels won by the opponent's
         blunder)."""
         if won is None:
             won = self.status is GameStatus.SURVIVED
-        outcome = "I SURVIVED 🎉" if won else "I Wordled 💀"
+        outcome = "I SURVIVED 🎉" if won else "I said the word 💀"
         undo_word = "undo" if self.undos_used == 1 else "undos"
         lines = [f"{title} — {outcome}",
                  f"{self.guesses_made}/{self.config.max_guesses} guesses · "

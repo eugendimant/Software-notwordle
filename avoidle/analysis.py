@@ -1,6 +1,6 @@
 """Move-quality analysis: how well did a guess preserve the word pool?
 
-In Don't Wordle a *good* move keeps as many valid words as possible for
+In Avoidle a *good* move keeps as many valid words as possible for
 the next row. For a candidate move ``w`` against the true secret, the
 retained pool is the set of words consistent with the feedback ``w``
 would receive. This module ranks the played word against the

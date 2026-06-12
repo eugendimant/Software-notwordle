@@ -1,4 +1,4 @@
-"""DON'T Wordle — Streamlit app.
+"""Avoidle — Streamlit app.
 
 The anti-Wordle: six guesses, and your only job is to NOT say the word.
 Run with:  streamlit run app.py
@@ -15,18 +15,18 @@ import zlib
 import streamlit as st
 import streamlit.components.v1 as components
 
-from dontwordle import __homepage__, __version__
-from dontwordle import achievements as ACH
-from dontwordle import bot as BOT
-from dontwordle import analysis as A
-from dontwordle import words as W
-from dontwordle.engine import (
+from avoidle import __homepage__, __version__
+from avoidle import achievements as ACH
+from avoidle import bot as BOT
+from avoidle import analysis as A
+from avoidle import words as W
+from avoidle.engine import (
     GRAY,
     GREEN,
     PRESETS,
     UNLIMITED,
     YELLOW,
-    DontWordleGame,
+    AvoidleGame,
     GameConfig,
     GameStatus,
     InvalidGuess,
@@ -95,7 +95,7 @@ def survival_config(round_no: int) -> GameConfig:
 # ----------------------------------------------------------------------
 # Session state
 # ----------------------------------------------------------------------
-def _new_game(mode: str) -> DontWordleGame:
+def _new_game(mode: str) -> AvoidleGame:
     ss = st.session_state
     lang, length = ss.lang, ss.word_len
     rng = random.Random()
@@ -118,7 +118,7 @@ def _new_game(mode: str) -> DontWordleGame:
     else:
         cfg = PRESETS[mode]
         secret = W.random_secret(lang, length, rng)
-    return DontWordleGame(secret, W.allowed_guesses(lang, length), cfg, rng=rng)
+    return AvoidleGame(secret, W.allowed_guesses(lang, length), cfg, rng=rng)
 
 
 def init_state() -> None:
@@ -158,7 +158,7 @@ def init_state() -> None:
         ss.game = _new_game(ss.mode)
 
 
-def player_won(game: DontWordleGame, mode: str) -> bool:
+def player_won(game: AvoidleGame, mode: str) -> bool:
     """Did the human win? In Duel the fatal guess may be the bot's."""
     if game.status is GameStatus.SURVIVED:
         return True
@@ -169,7 +169,7 @@ def player_won(game: DontWordleGame, mode: str) -> bool:
     return False
 
 
-def duel_score(game: DontWordleGame) -> int:
+def duel_score(game: AvoidleGame) -> int:
     """Score for a duel won by the bot's blunder (engine score is 0
     because the game technically ended WORDLED). Tougher bots pay more."""
     mult = BOT.BOT_MULTIPLIER.get(st.session_state.get("bot_level",
@@ -177,7 +177,7 @@ def duel_score(game: DontWordleGame) -> int:
     return round((100 + 12 * game.guesses_made) * mult)
 
 
-def game_score(game: DontWordleGame, mode: str) -> int:
+def game_score(game: AvoidleGame, mode: str) -> int:
     if mode == "duel":
         return duel_score(game) if player_won(game, mode) else 0
     return game.score()
@@ -195,7 +195,7 @@ def record_result_if_final(force: bool = False) -> None:
     """Count a finished game exactly once. A Wordled game with undos left
     is not final yet (the player may still take it back)."""
     ss = st.session_state
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     if ss.recorded or not game.is_over:
         return
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
@@ -234,7 +234,7 @@ def record_result_if_final(force: bool = False) -> None:
     ss.progress_dirty = True
 
 
-def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
+def _build_context(game: AvoidleGame, stats: dict) -> ACH.GameContext:
     ss = st.session_state
     won = player_won(game, ss.mode)
     if won:
@@ -259,7 +259,7 @@ def _build_context(game: DontWordleGame, stats: dict) -> ACH.GameContext:
     )
 
 
-def _award_progress(game: DontWordleGame, stats: dict) -> None:
+def _award_progress(game: AvoidleGame, stats: dict) -> None:
     """XP, achievements, daily streaks and side-quests — recorded exactly
     once per game (guarded by the caller's `recorded` flag)."""
     ss = st.session_state
@@ -416,7 +416,7 @@ def act_accept_fate() -> None:
 
 def _process_guess(word: str, clear_input: bool = False) -> None:
     ss = st.session_state
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     if game.is_over:
         return
     word = W.normalize_guess(word, ss.lang)
@@ -442,7 +442,7 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     ss.hint_word = None
     ss.peek_words = None
     if game.status is GameStatus.WORDLED:
-        ss.message = ("loss", f"💀 You Wordled! “{word.upper()}” was the "
+        ss.message = ("loss", f"💀 You said it! “{word.upper()}” was the "
                               "hidden word." +
                       (" You can still UNDO it…" if game.can_undo() else ""))
     elif game.status is GameStatus.SURVIVED:
@@ -486,7 +486,7 @@ def act_random_start() -> None:
     the secret itself, so it is deliberately unavailable after turn one."""
     _ensure_state()
     ss = st.session_state
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     if not game.is_over and game.guesses_made == 0:
         _reseed_daily_rng("random-start")
         # never suggest the secret: with the deterministic daily seed it
@@ -517,7 +517,7 @@ def act_review() -> None:
     """Post-game: find the best word for every row (exact where feasible)."""
     _ensure_state()
     ss = st.session_state
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     az = A.analyzer_for(ss.lang, game.word_length)
     step = 2 if ss.mode == "duel" else 1   # skip bot rows in duel
     ss.review = [
@@ -542,7 +542,7 @@ def act_hint() -> None:
     _ensure_state()
     ss = st.session_state
     _reseed_daily_rng("hint")
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     az = A.analyzer_for(ss.lang, game.word_length)
 
     def smart(safe, rng):  # safest sampled word, not just any safe word
@@ -578,7 +578,7 @@ STAT_KEYS = ("played", "survived", "streak", "best_streak", "best_score")
 
 def export_stats_json(compact: bool = False) -> str:
     ss = st.session_state
-    payload = {"app": "dontwordle", "version": __version__,
+    payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
                "xp": ss.xp,
                "achievements": sorted(ss.achievements),
@@ -604,7 +604,7 @@ def encode_progress() -> str:
     under the 4 KB cookie ceiling for years; the downloadable backup
     file keeps the full history."""
     ss = st.session_state
-    payload = {"app": "dontwordle", "version": __version__,
+    payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
                "xp": ss.xp,
                "achievements": sorted(ss.achievements),
@@ -819,11 +819,22 @@ CSS = """
   line-height: 1.35;
 }
 .block-container {max-width: 720px;}
-.dw-header {text-align:center; margin:-12px 0 2px 0;}
-.dw-title {font-family:'Helvetica Neue',Arial,sans-serif; font-weight:900;
-           letter-spacing:0.16em; font-size:2.0rem; line-height:1.2;}
-.dw-title .no {color:#e74c3c;}
-.dw-title .word {color:#6aaa64;}
+.dw-header {text-align:center; margin:-10px 0 2px 0;}
+/* the Avoidle wordmark: game tiles spelling the name — AVOID on dark
+   slate, LE on brand green, a thin red "do not cross" bar beneath */
+.dw-logo {display:inline-flex; gap:4px;}
+.dw-logo .lt {width:34px; height:34px; display:flex; align-items:center;
+              justify-content:center; border-radius:6px; font-weight:800;
+              font-size:1.25rem; color:#fff;
+              font-family:'Helvetica Neue',Arial,sans-serif;
+              box-shadow:0 2px 5px rgba(0,0,0,0.45),
+                         inset 0 1px 0 rgba(255,255,255,0.07);}
+.dw-logo .lt.d {background:linear-gradient(180deg,#3f3f42,#2e2e30);}
+.dw-logo .lt.g {background:linear-gradient(180deg,#62a35b,#4a7f44);}
+.dw-logo-bar {width:178px; height:3px; margin:5px auto 3px auto;
+              border-radius:2px;
+              background:linear-gradient(90deg,transparent,#e74c3c 18%,
+                                         #e74c3c 82%,transparent);}
 .dw-header p {margin:0; opacity:0.65; font-size:0.85rem;
               letter-spacing:0.28em; text-transform:uppercase;}
 .dw-banner {text-align:center; font-weight:700; font-size:1.05rem;
@@ -884,7 +895,8 @@ CSS = """
   .dw-tile {width:44px; height:44px; font-size:1.4rem;}
   .dw-row {gap:4px;}
   .dw-key {min-width:24px; height:34px; font-size:0.85rem;}
-  .dw-title {font-size:1.45rem;}
+  .dw-logo .lt {width:27px; height:27px; font-size:1.0rem;}
+  .dw-logo-bar {width:142px;}
   .dw-header p {display:none;}   /* tagline: declutter small screens */
   .dw-banner {font-size:0.92rem; margin:0 0 4px 0;}
   .dw-counts {gap:22px;}
@@ -963,13 +975,16 @@ CSS = """
 
 HEADER = """
 <div class="dw-header">
-  <div class="dw-title"><span class="no">DON'T</span> <span class="word">WORDLE</span></div>
+  <div class="dw-logo" role="img" aria-label="Avoidle">
+    <span class="lt d">A</span><span class="lt d">V</span><span class="lt d">O</span><span class="lt d">I</span><span class="lt d">D</span><span class="lt g">L</span><span class="lt g">E</span>
+  </div>
+  <div class="dw-logo-bar"></div>
   <p>guess words — never the word</p>
 </div>
 """
 
 
-def render_board(game: DontWordleGame, buffer: str = "",
+def render_board(game: AvoidleGame, buffer: str = "",
                  animate_last: bool = False, shake: bool = False,
                  duel: bool = False) -> str:
     rows = []
@@ -995,7 +1010,7 @@ def render_board(game: DontWordleGame, buffer: str = "",
     return f'<div class="{board_cls}">{"".join(rows)}</div>'
 
 
-def letter_knowledge(game: DontWordleGame) -> dict[str, str]:
+def letter_knowledge(game: AvoidleGame) -> dict[str, str]:
     """Best-known status per letter: G > Y > gray(eliminated)."""
     rank = {GREEN: 3, YELLOW: 2, GRAY: 1}
     know: dict[str, str] = {}
@@ -1006,7 +1021,7 @@ def letter_knowledge(game: DontWordleGame) -> dict[str, str]:
     return know
 
 
-def render_keyboard(game: DontWordleGame, lang: str) -> str:
+def render_keyboard(game: AvoidleGame, lang: str) -> str:
     know = letter_knowledge(game)
     colors = {GREEN: "#538d4e", YELLOW: "#b59f3b", GRAY: "#2c2c2e"}
     rows_html = []
@@ -1022,7 +1037,7 @@ def render_keyboard(game: DontWordleGame, lang: str) -> str:
     return f'<div class="dw-kbd">{"".join(rows_html)}</div>'
 
 
-def render_meter(game: DontWordleGame) -> str:
+def render_meter(game: AvoidleGame) -> str:
     import math
     n = game.remaining_count
     total = len(game.dictionary)
@@ -1051,7 +1066,7 @@ def render_meter(game: DontWordleGame) -> str:
             f'style="width:{pct:.1f}%;background:{color}"></div></div>')
 
 
-def render_click_keyboard(game: DontWordleGame, lang: str) -> None:
+def render_click_keyboard(game: AvoidleGame, lang: str) -> None:
     """Clickable on-screen keyboard (st.buttons). Letters keep their clue
     color knowledge: eliminated letters are disabled, known letters green.
     Wrapped in a keyed container so CSS can pin rows horizontal on phones."""
@@ -1114,7 +1129,7 @@ def show_message() -> None:
 TRAP_FORECAST_LIMIT = 30
 
 
-def trap_forecast(game: DontWordleGame) -> tuple[int, int] | None:
+def trap_forecast(game: AvoidleGame) -> tuple[int, int] | None:
     """In the endgame, count how many playable words lead straight into a
     trap (their feedback would leave only the secret playable). Cheap to
     compute exactly once the pool is small. Returns (traps, safe_options)
@@ -1140,7 +1155,7 @@ def next_daily_in() -> str:
     return f"{secs // 3600}h {secs % 3600 // 60:02d}m"
 
 
-def _secret_reveal(game: DontWordleGame) -> str:
+def _secret_reveal(game: AvoidleGame) -> str:
     """Post-game reveal: the word plus how common it is — fuel for the
     'was that word likely?' debrief."""
     rank = W.frequency_rank(game.secret, st.session_state.lang,
@@ -1167,21 +1182,21 @@ def share_title() -> str:
     if ss.word_len != 5:
         tag += f" ({ss.word_len} letters)"
     if ss.mode == "daily":
-        return f"Don't Wordle Daily {datetime.date.today().isoformat()}{tag}"
+        return f"Avoidle Daily {datetime.date.today().isoformat()}{tag}"
     if ss.mode == "survival":
-        return f"Don't Wordle Survival R{ss.survival_round}{tag}"
-    return f"Don't Wordle {ss.game.config.label}{tag}"
+        return f"Avoidle Survival R{ss.survival_round}{tag}"
+    return f"Avoidle {ss.game.config.label}{tag}"
 
 
 # ----------------------------------------------------------------------
 # Page
 # ----------------------------------------------------------------------
 def main() -> None:
-    st.set_page_config(page_title="DON'T Wordle", page_icon="🙅",
+    st.set_page_config(page_title="Avoidle", page_icon="🚫",
                        layout="centered")
     init_state()
     ss = st.session_state
-    game: DontWordleGame = ss.game
+    game: AvoidleGame = ss.game
     st.markdown(CSS, unsafe_allow_html=True)
     st.markdown(HEADER, unsafe_allow_html=True)
     with st.container(key="rulesbar"):
@@ -1190,7 +1205,7 @@ def main() -> None:
 
     # ----- sidebar ----------------------------------------------------
     with st.sidebar:
-        st.title("🙅 DON'T Wordle")
+        st.title("🚫 Avoidle")
         st.caption("Whatever you do — don't say the word.")
         lv = ACH.level_for_xp(ss.xp)
         st.progress(lv["into"] / lv["needed"],
@@ -1283,7 +1298,7 @@ def main() -> None:
             st.caption("Stats live in this browser session. Download them "
                        "to keep, re-upload to restore.")
             st.download_button("⬇️ Download stats", export_stats_json(),
-                               file_name="dontwordle_stats.json",
+                               file_name="avoidle_stats.json",
                                mime="application/json", width="stretch")
             up = st.file_uploader("Restore from file", type="json",
                                   key="stats_upload")
@@ -1454,7 +1469,7 @@ def main() -> None:
                            f"× {bd['multiplier']:g} {game.config.label} "
                            f"bonus{floor_note}")
         else:
-            st.error(f"💀 **You Wordled.** {_secret_reveal(game)}")
+            st.error(f"💀 **You said the word.** {_secret_reveal(game)}")
             if ss.mode == "survival" and not game.can_undo():
                 st.warning(f"⚔️ Run over at round {ss.survival_round}. "
                            f"Final run score: **{ss.survival_total}** · "

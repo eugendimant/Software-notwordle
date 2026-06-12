@@ -1,6 +1,6 @@
 """Tests for the achievements / XP / quest meta-game."""
 
-from dontwordle import achievements as ACH
+from avoidle import achievements as ACH
 
 
 def ctx(**kw) -> ACH.GameContext:

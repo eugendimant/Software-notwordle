@@ -2,7 +2,7 @@
 
 Run directly for a difficulty report:
 
-    python -m dontwordle.simulate [games_per_preset]
+    python -m avoidle.simulate [games_per_preset]
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 
 from . import words
-from .engine import PRESETS, DontWordleGame, GameConfig, GameStatus
+from .engine import PRESETS, AvoidleGame, GameConfig, GameStatus
 
 
 def policy_random(pool: list[str], rng: random.Random) -> str:
@@ -49,13 +49,13 @@ class SimResult:
 
 
 def play_one(secret: str, config: GameConfig, policy, rng: random.Random,
-             use_undo: bool = True, lang: str = "en") -> DontWordleGame:
+             use_undo: bool = True, lang: str = "en") -> AvoidleGame:
     """Play one full game, backtracking with undos like a careful human.
 
     Keeps a per-depth memory of words already tried so undos explore new
     branches instead of looping on a doomed one.
     """
-    game = DontWordleGame(secret, words.allowed_guesses(lang), config, rng=rng)
+    game = AvoidleGame(secret, words.allowed_guesses(lang), config, rng=rng)
     tried: dict[int, set[str]] = defaultdict(set)
     while not game.is_over:
         depth = game.guesses_made
@@ -109,7 +109,7 @@ def main() -> None:
 
 
 # ----------------------------------------------------------------------
-# Duel balance: python -m dontwordle.simulate duel [n]
+# Duel balance: python -m avoidle.simulate duel [n]
 # ----------------------------------------------------------------------
 def run_duels(level: str, n: int, player: str = "random", seed: int = 99,
               lang: str = "en", length: int = 5) -> float:
@@ -123,7 +123,7 @@ def run_duels(level: str, n: int, player: str = "random", seed: int = 99,
     ranks = _answer_rank(lang, length)
     wins = 0
     for _ in range(n):
-        g = DontWordleGame(words.random_secret(lang, length, rng), allowed,
+        g = AvoidleGame(words.random_secret(lang, length, rng), allowed,
                            cfg, rng=rng)
         while not g.is_over:
             pool = g.remaining_words

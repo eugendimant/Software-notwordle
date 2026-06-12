@@ -1,4 +1,4 @@
-# 📱 Taking DON'T Wordle to the iPhone App Store — The Complete Playbook
+# 📱 Taking AVOIDLE to the iPhone App Store — The Complete Playbook
 
 *Prepared for Eugen Dimant · v2.0 (updated for game v1.5.0.13) · honest edition*
 
@@ -25,7 +25,7 @@ under this name risks:
 - a trademark complaint *after* approval, which can nuke the listing
   and strike your developer account.
 
-**Action: rename for the store.** The *mechanic* (colored letter tiles)
+**Action: rename for the store. ✅ DECIDED: the game is now AVOIDLE** (renamed throughout the codebase). The *mechanic* (colored letter tiles)
 is not protectable and dozens of approved games use it — only the name
 and trade dress are the issue. Candidates that keep the hook (see Section 11 for the full
 brainstorm): **Avoidle**, **Don't Say It!**, **DodgeWord**.
@@ -62,18 +62,18 @@ widget showing today's streak. That package comfortably clears 4.2.
 
 **This repo is the spec.** The port is mechanical because the game is
 already isolated from the UI:
-- `dontwordle/engine.py` (pure logic incl. trap tracking) → TypeScript 1:1
-- `dontwordle/analysis.py` (move ratings, best-move review, trap
+- `avoidle/engine.py` (pure logic incl. trap tracking) → TypeScript 1:1
+- `avoidle/analysis.py` (move ratings, best-move review, trap
   forecast, smart hints) → TypeScript; ship in v1 — it's a signature
   feature
-- `dontwordle/achievements.py` (15 achievements, XP/levels, daily
+- `avoidle/achievements.py` (15 achievements, XP/levels, daily
   side-quests) → map 1:1 to **Game Center achievements** + a Game
   Center leaderboard on total XP
-- `dontwordle/bot.py` (3 fair duel opponents, balance validated over
+- `avoidle/bot.py` (3 fair duel opponents, balance validated over
   24,000 simulated duels) → TypeScript; Duel is the headline mode for
   the store listing ("play AGAINST the bot — whoever says the word
   loses")
-- `dontwordle/words.py` + `dontwordle/data/**` → ship as JSON assets
+- `avoidle/words.py` + `avoidle/data/**` → ship as JSON assets
   (12 dictionaries: en/de/es/ru × 4/5/6 letters, frequency-ordered,
   profanity-filtered — the filtering matters for the 4+ age rating)
 - `tests/` (145 tests) → port the engine/bot/achievement suites as the
@@ -124,7 +124,7 @@ already isolated from the UI:
    your Apple ID ($99/year). Individual enrollment is fine (your name
    shows as seller; an LLC needs a D-U-N-S number).
 2. **Xcode** (Mac required) — latest version from the App Store.
-3. **Bundle ID** — e.g. `io.github.eugendimant.dontsayit` (Certificates,
+3. **Bundle ID** — e.g. `io.github.eugendimant.avoidle` (Certificates,
    Identifiers & Profiles → Identifiers → +). Enable capabilities:
    Push Notifications, Game Center.
 4. **Signing** — in Xcode: Settings → Accounts → your team →
@@ -150,7 +150,7 @@ already isolated from the UI:
 ## 5. The listing (this is where acceptance is won)
 
 ### Metadata
-- **Name** (30 chars): `Don't Say It! — Anti Word Game` *(no "Wordle")*
+- **Name** (30 chars): `Avoidle — Don't Say the Word` *(no "Wordle")*
 - **Subtitle** (30 chars): `Dodge the hidden word & win`
 - **Keywords** (100 chars, comma-separated, no brand names):
   `word,game,puzzle,daily,anti,avoid,letters,brain,streak,vocabulary,german,spanish,russian`
@@ -228,7 +228,7 @@ manually so launch day is yours).
 4. **Launch sequence**: PWA live first (Path A) → collect a waitlist on
    eugendimant.github.io → TestFlight link to the first 100 (TestFlight
    scarcity is its own marketing) → App Store release + Product Hunt +
-   r/wordgames + the original dontwordle community → ASO iterate on
+   r/wordgames + the original avoidle community → ASO iterate on
    keywords every 2 weeks.
 5. **Game Center leaderboards** give the competitive loop without
    building a backend.

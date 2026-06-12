@@ -8,7 +8,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from dontwordle.engine import GameStatus
+from avoidle.engine import GameStatus
 
 APP = str(Path(__file__).parent.parent / "app.py")
 
@@ -38,7 +38,7 @@ def test_clickable_keyboard_is_the_default():
     at = make_click_app()
     assert at.session_state["input_mode"] == "click"
     assert at.button(key="kbd_q") is not None  # keyboard rendered
-    from dontwordle import words as W
+    from avoidle import words as W
     assert W.LANGUAGES["en"].startswith("🇺🇸")  # American English
 
 
@@ -171,7 +171,7 @@ def test_modes_hide_unavailable_abilities():
 
 def test_stats_export_import_roundtrip():
     import app as app_module
-    exported = ('{"app": "dontwordle", "version": "x", '
+    exported = ('{"app": "avoidle", "version": "x", '
                 '"stats": {"daily": {"played": 3, "survived": 2, '
                 '"streak": 2, "best_streak": 2, "best_score": 412}, '
                 '"bogus_mode": {"played": 1}}, "survival_best": 777}')
@@ -184,7 +184,7 @@ def test_stats_export_import_roundtrip():
 
 
 def test_word_length_switch_starts_fresh_game():
-    from dontwordle import words as W
+    from avoidle import words as W
     at = make_app()
     at.selectbox(key="len_select").set_value(6).run()
     assert not at.exception
@@ -296,7 +296,7 @@ def test_legacy_stats_keys_upgrade():
 
 
 def test_language_switch_starts_fresh_game_in_that_dictionary():
-    from dontwordle import words as W  # noqa
+    from avoidle import words as W  # noqa
     at = make_app()
     at.selectbox(key="lang_select").set_value("de").run()
     assert not at.exception
@@ -395,7 +395,7 @@ def test_daily_practice_replay_does_not_farm_stats():
 
 def test_fatal_and_forced_grades():
     import random as _random
-    from dontwordle.analysis import analyzer_for, rate_move
+    from avoidle.analysis import analyzer_for, rate_move
     az = analyzer_for("en")
     # playing the secret is graded fatal, never 'brilliant'
     r = rate_move(az, "crane", az.words[:50] + ["crane"], "crane",
@@ -436,7 +436,7 @@ def test_win_reveals_secret_and_frequency():
 
 
 def test_trap_forecast_matches_brute_force():
-    from dontwordle.engine import score_guess
+    from avoidle.engine import score_guess
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
@@ -515,7 +515,7 @@ def test_win_awards_xp_and_achievements():
 
 
 def test_loss_gives_participation_xp_only():
-    from dontwordle import achievements as ACH
+    from avoidle import achievements as ACH
     at = make_app()
     game = at.session_state["game"]
     game.undos_used = game.config.max_undos  # make the loss final
@@ -556,7 +556,7 @@ def test_backup_roundtrip_with_progress_fields():
 
 def test_hostile_backup_files_rejected_or_clamped():
     import app as app_module
-    from dontwordle import achievements as ACH
+    from avoidle import achievements as ACH
     # absurd-but-finite xp is clamped, not allowed to hang the session
     p = app_module.parse_stats_json('{"stats": {}, "xp": 1e300}')
     assert p["xp"] == ACH.XP_CAP
@@ -721,8 +721,8 @@ def test_duel_mode_full_flow():
 
 def test_bot_levels_play_fair_and_differ():
     import random as _random
-    from dontwordle import words as W
-    from dontwordle.bot import bot_pick, _answer_rank, BOT_LEVELS
+    from avoidle import words as W
+    from avoidle.bot import bot_pick, _answer_rank, BOT_LEVELS
     ranks = _answer_rank("en", 5)
     pool = list(W.allowed_guesses())[:400] + list(W.answers())[:50]
     rng = _random.Random(1)
@@ -743,7 +743,7 @@ def test_bot_levels_play_fair_and_differ():
 
 
 def test_duel_bot_strength_selector():
-    from dontwordle.bot import BOT_MULTIPLIER
+    from avoidle.bot import BOT_MULTIPLIER
     at = make_app()
     at.radio(key="mode_label").set_value("🤖 Duel").run()
     assert not at.exception
@@ -908,7 +908,7 @@ def test_new_game_button():
 
 
 def test_version_and_homepage_in_sidebar():
-    from dontwordle import __homepage__, __version__
+    from avoidle import __homepage__, __version__
     at = make_app()
     rendered = " ".join(str(md.value) for md in at.markdown)
     sidebar_md = " ".join(str(md.value) for md in at.sidebar.markdown)

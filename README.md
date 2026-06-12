@@ -1,13 +1,13 @@
-# 🙅 DON'T Wordle
+# 🚫 Avoidle
 
-**The anti-Wordle.** Six guesses — and your only job is to *never* say the
-hidden word. A fast, modern [Streamlit](https://streamlit.io) adaptation of
+**Avoidle** — the word game where guessing the answer means you LOSE.
+Six guesses, and your only job is to *never* say the hidden word. A fast, modern [Streamlit](https://streamlit.io) adaptation of
 the cult classic [dontwordle.com](https://dontwordle.com), rebuilt from
 scratch with extra game modes, abilities, move-quality analysis, four
 dictionary languages, scoring and stats.
 
 > Built by [Eugen Dimant](https://eugendimant.github.io) · current version
-> in [`dontwordle/__init__.py`](dontwordle/__init__.py)
+> in [`avoidle/__init__.py`](avoidle/__init__.py)
 
 ## Why it's hard (and fun)
 
@@ -114,10 +114,10 @@ point it at this repo, main file `app.py`. Done.
 ## Architecture & testing
 
 ```
-dontwordle/
+avoidle/
   engine.py     pure game logic (zero UI deps)
   words.py      word lists, daily/random secrets
-  simulate.py   self-play balance harness (python -m dontwordle.simulate)
+  simulate.py   self-play balance harness (python -m avoidle.simulate)
   analysis.py   numpy-vectorized move-quality analyzer
   data/<lang>/  12 dictionaries: {en,de,ru,es} × {4,5,6}-letter words
 app.py          Streamlit UI
@@ -125,7 +125,7 @@ tests/          120+ tests: engine, analysis, meta-game, self-play, AppTest UI
 ```
 
 The engine was tuned with thousands of simulated self-play games per
-language (`python -m dontwordle.simulate 300`): Classic lands near a
+language (`python -m avoidle.simulate 300`): Classic lands near a
 44–61% bot survival rate across languages, Impossible near 3–12% —
 brutal but beatable.
 
@@ -135,6 +135,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.14** — 🚫 the game is now **AVOIDLE**: full rebrand (package,
+  class names, UI, share cards, docs) with a professional tile wordmark
+  (AVOID on slate, LE on green, red "do not cross" bar); loss verb is
+  now "you said the word"; App Store guide locked to the Avoidle name
+  and bundle id. Daily-word seeds and saved progress are untouched —
+  existing players keep their words, streaks and cookies.
 - **1.5.0.13** — thorough review round (2 agents): real zlib-bomb cap
   on backup/cookie decoding (the old guard was ineffective — a 3KB
   upload could balloon to 200MB); duel fairness fixes: the bot's tiles
@@ -143,7 +149,7 @@ python -m pytest
   multiplier, and Houdini can't unlock off the bot's trap; cookie
   history pruned to what the app needs so persistence never silently
   stops for long-term players; duel balance reproducible via
-  `python -m dontwordle.simulate duel`; rules text notes Duel has no
+  `python -m avoidle.simulate duel`; rules text notes Duel has no
   undos.
 - **1.5.0.12** — duel bots got a difficulty ladder: 😴 Easy (reckless,
   gravitates toward likely secrets), 🤖 Normal (dodges the likeliest

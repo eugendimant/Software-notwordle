@@ -1,14 +1,14 @@
-"""Unit tests for the Don't Wordle engine."""
+"""Unit tests for the Avoidle engine."""
 
 import datetime
 import random
 
 import pytest
 
-from dontwordle import words
-from dontwordle.engine import (
+from avoidle import words
+from avoidle.engine import (
     PRESETS,
-    DontWordleGame,
+    AvoidleGame,
     GameConfig,
     GameStatus,
     InvalidGuess,
@@ -89,7 +89,7 @@ def test_daily_secret_is_deterministic_and_varies():
 # ----------------------------------------------------------------------
 @pytest.fixture()
 def game():
-    return DontWordleGame(
+    return AvoidleGame(
         secret="crane",
         dictionary=words.allowed_guesses(),
         config=PRESETS["classic"],
@@ -104,7 +104,7 @@ def test_instant_loss_on_secret(game):
 
 
 def test_survival_win():
-    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["classic"],
+    g = AvoidleGame("crane", words.allowed_guesses(), PRESETS["classic"],
                        rng=random.Random(1))
     for _ in range(g.config.max_guesses):
         assert g.status is GameStatus.PLAYING
@@ -134,19 +134,19 @@ def test_invalid_guesses_rejected(game):
 def test_violation_diagnosis_is_specific():
     # the bug-report scenario: TREAT vs CRANE gives E yellow in spot 3;
     # BREAK satisfies the green R but puts E right back in spot 3
-    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g = AvoidleGame("crane", words.allowed_guesses(), PRESETS["zen"])
     g.submit("treat")
     assert g.history[0].feedback == "-GYY-"
     with pytest.raises(InvalidGuess,
                        match="E can't sit in spot 3 again — it was yellow"):
         g.submit("break")
     # a word that ignores a green lock names the exact spot and letter
-    g2 = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g2 = AvoidleGame("crane", words.allowed_guesses(), PRESETS["zen"])
     g2.submit("stone")
     with pytest.raises(InvalidGuess, match="spot 4 is locked to N"):
         g2.submit("blare")
     # dropping a known (yellow) letter is called out by name
-    g3 = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g3 = AvoidleGame("crane", words.allowed_guesses(), PRESETS["zen"])
     g3.submit("treat")
     with pytest.raises(InvalidGuess, match="must use E"):
         g3.submit("braid")
@@ -180,7 +180,7 @@ def test_undo_can_revert_a_loss(game):
 
 def test_undo_limits():
     cfg = GameConfig("Test", max_guesses=6, max_undos=1)
-    g = DontWordleGame("crane", words.allowed_guesses(), cfg)
+    g = AvoidleGame("crane", words.allowed_guesses(), cfg)
     assert not g.undo()           # nothing to undo
     g.submit("stone")
     assert g.undo()
@@ -190,7 +190,7 @@ def test_undo_limits():
 
 
 def test_no_undo_after_win():
-    g = DontWordleGame("crane", words.allowed_guesses(),
+    g = AvoidleGame("crane", words.allowed_guesses(),
                        GameConfig("T", max_guesses=1, max_undos=5))
     g.submit("stone")
     assert g.status is GameStatus.SURVIVED
@@ -212,7 +212,7 @@ def test_peek_samples_remaining(game):
 
 
 def test_trapped_detection():
-    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["zen"])
+    g = AvoidleGame("crane", words.allowed_guesses(), PRESETS["zen"])
     assert not g.is_trapped
     g._pools.append(["crane"])    # force endgame state directly
     assert g.is_trapped
@@ -220,7 +220,7 @@ def test_trapped_detection():
 
 
 def test_score_components():
-    g = DontWordleGame("crane", words.allowed_guesses(),
+    g = AvoidleGame("crane", words.allowed_guesses(),
                        GameConfig("T", max_guesses=1, max_undos=5))
     g.submit("brand")             # vs CRANE -> -GGG-
     assert g.status is GameStatus.SURVIVED
@@ -230,7 +230,7 @@ def test_score_components():
 
 
 def test_score_breakdown_matches_score():
-    g = DontWordleGame("crane", words.allowed_guesses(),
+    g = AvoidleGame("crane", words.allowed_guesses(),
                        GameConfig("T", max_guesses=2, max_undos=5,
                                   score_multiplier=1.5))
     g.submit("stone")
@@ -254,7 +254,7 @@ def test_score_breakdown_zero_when_not_won(game):
 
 
 def test_share_text_singular_undo():
-    g = DontWordleGame("crane", words.allowed_guesses(),
+    g = AvoidleGame("crane", words.allowed_guesses(),
                        GameConfig("T", max_guesses=1, max_undos=5))
     g.submit("stone")
     g.undos_used = 1
@@ -264,7 +264,7 @@ def test_share_text_singular_undo():
 
 
 def test_score_floor_flagged():
-    g = DontWordleGame("crane", words.allowed_guesses(),
+    g = AvoidleGame("crane", words.allowed_guesses(),
                        GameConfig("T", max_guesses=1, max_undos=0,
                                   max_hints=10, score_multiplier=0.25))
     g.hints_used = 10  # -300 penalty drives raw score negative
@@ -275,13 +275,13 @@ def test_score_floor_flagged():
 
 def test_trap_faced_semantics():
     # acting while trapped (submit or undo) marks the trap as faced
-    g = DontWordleGame("crane", words.allowed_guesses(), PRESETS["classic"])
+    g = AvoidleGame("crane", words.allowed_guesses(), PRESETS["classic"])
     g._pools[-1] = ["crane"]
     assert g.is_trapped and not g.was_ever_trapped
     g.submit("crane")
     assert g.was_ever_trapped
     # a final winning guess that merely collapses the pool does NOT count
-    g2 = DontWordleGame("crane", words.allowed_guesses(),
+    g2 = AvoidleGame("crane", words.allowed_guesses(),
                         GameConfig("T", max_guesses=1, max_undos=0))
     g2._pools[-1] = ["crane", "stone"]
     g2.submit("stone")  # survives; pool collapses to [crane] afterwards
@@ -301,4 +301,4 @@ def test_presets_sane():
 
 def test_bad_secret_rejected():
     with pytest.raises(ValueError):
-        DontWordleGame("xyzzy!", words.allowed_guesses())
+        AvoidleGame("xyzzy!", words.allowed_guesses())

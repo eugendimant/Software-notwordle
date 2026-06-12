@@ -4,9 +4,9 @@ import random
 
 import pytest
 
-from dontwordle import words
-from dontwordle.engine import PRESETS, DontWordleGame, GameStatus
-from dontwordle.simulate import POLICIES, play_one, run
+from avoidle import words
+from avoidle.engine import PRESETS, AvoidleGame, GameStatus
+from avoidle.simulate import POLICIES, play_one, run
 
 
 @pytest.mark.parametrize("preset", list(PRESETS))
@@ -19,7 +19,7 @@ def test_selfplay_invariants(preset, policy_name):
     answers = words.answers()
     for i in range(60):
         secret = rng.choice(answers)
-        game = DontWordleGame(secret, words.allowed_guesses(), cfg,
+        game = AvoidleGame(secret, words.allowed_guesses(), cfg,
                               rng=random.Random(i))
         prev_count = game.remaining_count
         while not game.is_over:
@@ -64,6 +64,6 @@ def test_difficulty_ordering():
 def test_share_text_after_selfplay():
     g = play_one("quart", PRESETS["classic"], POLICIES["common"],
                  random.Random(5))
-    txt = g.share_text("Don't Wordle Test")
-    assert txt.startswith("Don't Wordle Test")
+    txt = g.share_text("Avoidle Test")
+    assert txt.startswith("Avoidle Test")
     assert any(e in txt for e in ("🟩", "🟨", "⬜")) or g.guesses_made == 0
