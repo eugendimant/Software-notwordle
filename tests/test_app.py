@@ -99,7 +99,7 @@ def test_undo_button_roundtrip():
 
 def test_hint_is_safe_and_displayed():
     at = make_app()
-    button(at, "🛟 Hint").click()
+    button(at, "💡 Hint").click()
     at.run()
     assert not at.exception
     game = at.session_state["game"]
@@ -161,7 +161,7 @@ def test_modes_hide_unavailable_abilities():
     at.radio(key="mode_label").set_value("💀 Impossible").run()
     assert not at.exception
     labels = [b.label for b in at.button]
-    assert not any(l.startswith(("↩️ Undo", "🛟 Hint", "👁️ Peek"))
+    assert not any(l.startswith(("↩️ Undo", "💡 Hint", "👁️ Peek"))
                    for l in labels)
     # zen shows infinite budgets
     at.radio(key="mode_label").set_value("🧘 Zen").run()
@@ -683,7 +683,7 @@ def test_progress_cookie_roundtrip():
 def test_duel_mode_full_flow():
     import random as _random
     at = make_app()
-    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
     assert not at.exception
     game = at.session_state["game"]
     assert game.config.label == "Duel"
@@ -745,7 +745,7 @@ def test_bot_levels_play_fair_and_differ():
 def test_duel_bot_strength_selector():
     from avoidle.bot import BOT_MULTIPLIER
     at = make_app()
-    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
     assert not at.exception
     assert at.session_state["bot_level"] == "normal"
     at.selectbox(key="bot_select").set_value("hard").run()
@@ -760,7 +760,7 @@ def test_duel_bot_strength_selector():
 def test_duel_player_blunder_is_a_loss():
     import app as app_module
     at = make_app()
-    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
     game = at.session_state["game"]
     guess(at, game.secret)  # player says the word -> instant loss
     game = at.session_state["game"]
@@ -809,7 +809,7 @@ def test_cookie_prunes_history_but_export_keeps_it():
 def test_duel_context_counts_player_tiles_only():
     import app as app_module
     at = make_app()
-    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
     import random as _random
     game = at.session_state["game"]
     game.secret = "crane"
@@ -938,7 +938,7 @@ def test_mode_switch_rolls_back_on_failure():
         raise RuntimeError("word list hiccup")
     try:
         words.random_secret = boom
-        at.radio(key="mode_label").set_value("🤖 Duel").run()
+        at.radio(key="mode_label").set_value("🆚 Duel").run()
     finally:
         words.random_secret = orig
     assert not at.exception
@@ -950,6 +950,51 @@ def test_mode_switch_rolls_back_on_failure():
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
     assert at.session_state["game"].guesses_made == 1
+
+
+def test_app_and_core_versions_locked_together():
+    """The hot-redeploy guard only works if app.py's expected version
+    string is bumped in lockstep with avoidle.__version__."""
+    import app as app_module
+    from avoidle import __version__
+    assert app_module._EXPECTED_CORE_VERSION == __version__
+
+
+def test_stale_core_module_is_evicted_on_app_run():
+    """Simulates a Streamlit Cloud hot-update: the cached avoidle module
+    reports an old version; running app.py must evict and reload it so
+    mixed-version signature errors can never reach the player."""
+    import sys
+    import avoidle
+    real = avoidle.__version__
+    snapshot = {n: m for n, m in sys.modules.items()
+                if n == "avoidle" or n.startswith("avoidle.")}
+    try:
+        avoidle.__version__ = "0.0.0.0"   # pretend the cache is stale
+        at = AppTest.from_file(APP, default_timeout=30)
+        at.run()
+        assert not at.exception
+        import avoidle as reloaded
+        assert reloaded.__version__ == real
+    finally:
+        # restore the ORIGINAL module objects so later tests keep
+        # consistent class identities
+        for n in [n for n in list(sys.modules)
+                  if n == "avoidle" or n.startswith("avoidle.")]:
+            del sys.modules[n]
+        sys.modules.update(snapshot)
+        avoidle.__version__ = real
+
+
+def test_duel_board_grows_instead_of_stacking_empty_rows():
+    at = make_app()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
+    assert not at.exception
+    boards = [str(md.value) for md in at.markdown
+              if 'class="dw-board' in str(md.value)]
+    assert boards and "rows in reserve" in boards[0]
+    assert boards[0].count("dw-empty") <= \
+        2 * at.session_state["game"].word_length
 
 
 def test_losing_by_guessing_secret_then_undo_rescue():
