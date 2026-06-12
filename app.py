@@ -26,7 +26,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.1.0"
+_EXPECTED_CORE_VERSION = "1.5.1.1"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -57,13 +57,26 @@ from avoidle.engine import (
 # Modes
 # ----------------------------------------------------------------------
 MODES = {
+    # ordered as a progression: the everyday puzzles, the no-pressure
+    # room, the solo difficulty ladder, the endless run, the showdown
     "📅 Daily Challenge": "daily",
     "🎲 Classic": "classic",
-    "🆚 Duel": "duel",
+    "🧘 Zen": "zen",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
     "⚔️ Survival": "survival",
-    "🧘 Zen": "zen",
+    "🆚 Duel": "duel",
+}
+
+#: one-glance blurbs shown under each mode option (and in the ? tooltip)
+MODE_BLURBS = {
+    "daily": "One shared word a day — keep the streak",
+    "classic": "Random word, standard rules",
+    "zen": "No-pressure practice, unlimited help",
+    "hard": "2 undos, no hints · 1.5× score",
+    "impossible": "7 guesses, zero help · 2.5× score",
+    "survival": "Endless rounds — stakes rise each round",
+    "duel": "Alternate vs the bot — loser says the word",
 }
 
 DUEL_CONFIG = GameConfig("Duel", max_guesses=12, max_undos=0,
@@ -525,7 +538,8 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
             word=word, retained=game.remaining_count,
             pool_size=len(game.pool_before(row)), percentile=50.0,
             best_word=word, best_retained=game.remaining_count,
-            exact=False)
+            exact=False, fatal=word == game.secret,
+            forced=len(game.pool_before(row)) == 1)
     ss.ratings.append(rating)
     ss.hint_word = None
     ss.peek_words = None
@@ -989,6 +1003,13 @@ section[data-testid="stSidebar"] h1 {
 .dw-think span:nth-child(2) {animation-delay: .2s;}
 .dw-think span:nth-child(3) {animation-delay: .4s;}
 @keyframes dw-blink {0%,100% {opacity:0.15;} 50% {opacity:1;}}
+/* the bot's visible "thinking" progress: fills client-side while the
+   server holds the reply back for the same duration */
+.dw-think-track {max-width:240px; height:3px; margin:6px auto 0 auto;
+                 background:#262628; border-radius:2px; overflow:hidden;}
+.dw-think-fill {height:100%; background:#b59f3b; border-radius:2px;
+                animation: dw-thinkfill linear both;}
+@keyframes dw-thinkfill {from {width:3%;} to {width:100%;}}
 .st-key-fatebar {max-width: 420px; margin: 2px auto 0 auto;}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
@@ -1022,8 +1043,25 @@ section[data-testid="stSidebar"] h1 {
             margin:0 0 2px 0;}
 .dw-banner .sub {opacity:0.7; font-weight:400; font-size:0.9rem;}
 .dw-board {display:flex; flex-direction:column; gap:5px; align-items:center;
-           margin: 2px 0 2px 0;}
-.dw-row {display:flex; gap:5px;}
+           margin: 2px 0 14px 0;}  /* breathing room above the keyboard */
+.dw-row {display:flex; gap:5px; position:relative;}
+/* per-move verdict rail: lives in the empty space right of the tiles,
+   never shifts the centered board (absolutely positioned off the row) */
+.dw-rail {position:absolute; left:100%; top:50%;
+          transform:translateY(-50%); margin-left:14px; padding-left:8px;
+          border-left:2px solid #555; font-size:0.68rem; line-height:1.4;
+          opacity:0.85; white-space:nowrap; text-align:left;}
+.dw-rail b {font-size:0.73rem;}
+.dw-rail-new {animation: dw-rail-in .4s ease .6s both;}
+@keyframes dw-rail-in {from {opacity:0;} to {opacity:0.85;}}
+/* no side space, no rail — the verdict line under the keyboard returns.
+   The space that matters is the MAIN PANE's (the sidebar steals ~340px
+   when open), so the toggle is a container query on the content column;
+   the media query is the safety net for phones on older browsers. */
+.block-container {container-type: inline-size;}
+@media (max-width: 620px) {.dw-rail {display:none;}}
+@container (width < 640px) {.dw-rail {display:none;}}
+@container (width >= 640px) {.dw-substatus {display:none;}}
 .dw-tile {width:44px; height:44px; display:flex; align-items:center;
           justify-content:center; font-size:1.45rem; font-weight:800;
           color:#fff; text-transform:uppercase; border-radius:6px;
@@ -1174,12 +1212,33 @@ HEADER = """
 """
 
 
+def _rail_html(r: A.MoveRating, fresh: bool) -> str:
+    """Per-row verdict pinned in the empty space right of the tiles:
+    grade on top, kept-count + percentile beaten below, color-coded."""
+    if r.forced:
+        color, top, sub = "#9a9a9c", r.grade, "only word left"
+    elif r.fatal:
+        color, top, sub = "#c04b4b", r.grade, "the hidden word"
+    else:
+        p = r.percentile
+        color = ("#538d4e" if p >= 70 else "#b59f3b" if p >= 45
+                 else "#e67e22" if p >= 20 else "#c04b4b")
+        approx = "" if r.exact else "~"
+        top = r.grade
+        sub = f"kept {r.retained:,} · {approx}{p:.0f}%"
+    cls = "dw-rail dw-rail-new" if fresh else "dw-rail"
+    return (f'<span class="{cls}" style="border-color:{color}">'
+            f'<b>{top}</b><br>{sub}</span>')
+
+
 def render_board(game: AvoidleGame, buffer: str = "",
                  animate_last: bool = False, shake: bool = False,
-                 duel: bool = False) -> str:
+                 duel: bool = False,
+                 ratings: list[A.MoveRating] | None = None) -> str:
     rows = []
     last = len(game.history) - 1
     width = game.word_length
+    ratings = ratings or []
     for i, turn in enumerate(game.history):
         tiles = "".join(
             f'<div class="dw-tile" style="background:{TILE_COLORS[c]}">{l}</div>'
@@ -1188,7 +1247,14 @@ def render_board(game: AvoidleGame, buffer: str = "",
         cls = "dw-row dw-reveal" if (animate_last and i == last) else "dw-row"
         if duel and i % 2 == 1:
             cls += " dw-bot"
-        rows.append(f'<div class="{cls}">{tiles}</div>')
+        # the live verdict rail: player rows only (in duel the bot's rows
+        # carry the 👾 marker instead). Ratings track player moves 1:1.
+        r_idx = i // 2 if duel else i
+        rail = ""
+        if (not duel or i % 2 == 0) and r_idx < len(ratings):
+            rail = _rail_html(ratings[r_idx],
+                              fresh=animate_last and i == last)
+        rows.append(f'<div class="{cls}">{tiles}{rail}</div>')
     # duel boards are 12 rows deep — grow as played instead of pushing
     # the keyboard below the fold with a wall of empty tiles
     empty_to_show = min(game.guesses_left, 2) if duel else game.guesses_left
@@ -1430,9 +1496,14 @@ def main() -> None:
                  horizontal=True)
         labels = list(MODES)
         current = next(k for k, v in MODES.items() if v == ss.mode)
+        mode_help = "\n".join(
+            f"- **{label}** — {MODE_BLURBS[m]}"
+            for label, m in MODES.items()
+        ) + "\n\nChanging mode starts a fresh game."
         st.radio("Game mode", labels, index=labels.index(current),
                  key="mode_label", on_change=act_change_mode,
-                 help="Changing mode starts a fresh game.")
+                 captions=[MODE_BLURBS[MODES[lab]] for lab in labels],
+                 help=mode_help)
         st.caption(MODE_HELP[ss.mode])
         if ss.mode == "duel":
             levels = list(BOT.BOT_LEVELS)
@@ -1573,19 +1644,35 @@ def main() -> None:
     st.markdown(render_board(game, buffer=buffer,
                              animate_last=ss.last_action == "guess",
                              shake=ss.last_action == "error",
-                             duel=ss.mode == "duel"),
+                             duel=ss.mode == "duel",
+                             ratings=ss.ratings),
                 unsafe_allow_html=True)
     if ss.get("bot_pending") and ss.mode == "duel" and not game.is_over:
-        # the player's row just rendered above; give the bot a visible
-        # moment to "think", then let it reply and rerun
+        # the player's row just rendered above; give the bot a visible,
+        # human-feeling moment to "think" — a variable-length pause with
+        # a progress bar that fills for exactly that long — then reply
         from avoidle.endgame import MAX_SOLVE_POOL
         deep = (ss.bot_level == "hard"
                 and game.remaining_count <= MAX_SOLVE_POOL)
-        verb = "solving the endgame" if deep else "thinking"
-        st.markdown(f'<div class="dw-status ok dw-think">👾 {verb}'
-                    '<span>.</span><span>.</span><span>.</span></div>',
-                    unsafe_allow_html=True)
-        time.sleep(0.7 if deep else 0.5)
+        if deep:
+            verb = "solving the endgame"
+            delay = random.uniform(1.6, 2.4)
+        else:
+            verb = random.choice(["thinking", "weighing its options",
+                                  "reading the board",
+                                  "narrowing it down"])
+            delay = random.uniform(0.9, 1.7)
+        try:   # tests set pace to 0; a stray value must never crash
+            delay = max(0.0, delay * float(ss.get("bot_pace", 1.0)))
+        except (TypeError, ValueError):
+            pass
+        st.markdown(
+            f'<div class="dw-status ok dw-think">👾 {verb}'
+            '<span>.</span><span>.</span><span>.</span></div>'
+            f'<div class="dw-think-track"><div class="dw-think-fill" '
+            f'style="animation-duration:{max(delay, 0.1):.2f}s"></div></div>',
+            unsafe_allow_html=True)
+        time.sleep(delay)
         ss.bot_pending = False
         _bot_reply()
         st.rerun()

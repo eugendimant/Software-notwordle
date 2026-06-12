@@ -21,6 +21,7 @@ def make_app() -> AppTest:
     at.run()
     assert not at.exception
     at.session_state["input_mode"] = "type"
+    at.session_state["bot_pace"] = 0.0   # skip the duel thinking pause
     at.run()
     assert not at.exception
     return at
@@ -31,6 +32,7 @@ def make_click_app() -> AppTest:
     at = AppTest.from_file(APP, default_timeout=30)
     at.run()
     assert not at.exception
+    at.session_state["bot_pace"] = 0.0   # skip the duel thinking pause
     return at
 
 
@@ -998,6 +1000,48 @@ def test_duel_board_grows_instead_of_stacking_empty_rows():
     assert boards and "rows in reserve" in boards[0]
     assert boards[0].count("dw-empty") <= \
         2 * at.session_state["game"].word_length
+
+
+def test_move_feedback_rail_renders_right_of_board():
+    """Every played row carries its verdict in the rail next to the
+    tiles (grade + kept-count), so feedback never gets lost below."""
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    boards = [str(md.value) for md in at.markdown
+              if 'class="dw-board' in str(md.value)]
+    assert boards and "dw-rail" in boards[0] and "kept" in boards[0]
+    # one rail per played row
+    assert boards[0].count("dw-rail") >= 1
+
+
+def test_duel_rail_marks_player_rows_only():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
+    game = at.session_state["game"]
+    game.rng = _random.Random(5)
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    boards = [str(md.value) for md in at.markdown
+              if 'class="dw-board' in str(md.value)]
+    # after player move + bot reply: exactly one rail (the player's)
+    n_rails = boards[0].count('class="dw-rail')
+    assert n_rails == len(at.session_state["ratings"]) == 1
+
+
+def test_mode_radio_carries_blurbs_and_thinking_css_present():
+    import app as app_module
+    # every mode has a one-glance blurb, shown as radio captions and in
+    # the ? tooltip
+    assert set(app_module.MODE_BLURBS) == set(app_module.MODES.values())
+    assert all(app_module.MODE_BLURBS[m] for m in app_module.MODES.values())
+    # the bot's visible thinking progress bar + the rail styles ship in
+    # the stylesheet, and the board keeps its keyboard breathing room
+    assert "dw-think-track" in app_module.CSS
+    assert "dw-rail" in app_module.CSS
+    assert "margin: 2px 0 14px 0" in app_module.CSS
 
 
 def test_duel_recursive_read_after_endgame():

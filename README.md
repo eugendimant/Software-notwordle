@@ -28,10 +28,15 @@ toward the one word you must not say. Survive all your guesses and you win.
 |------|--------:|------:|------:|------:|------:|
 | 📅 Daily Challenge | 6 | 5 | 1 | 1 | 1× |
 | 🎲 Classic | 6 | 5 | 1 | 1 | 1× |
+| 🧘 Zen | 6 | ∞ | ∞ | ∞ | 0.25× |
 | 🔥 Hard | 6 | 2 | 0 | 1 | 1.5× |
 | 💀 Impossible | **7** | 0 | 0 | 0 | 2.5× |
 | ⚔️ Survival | 6/round | 5 → 0 | early rounds | 1 | climbs +25%/round |
-| 🧘 Zen | 6 | ∞ | ∞ | ∞ | 0.25× |
+| 🆚 Duel | 12 rows | 0 | 0 | 1 | 1×–2.5× by bot |
+
+The mode menu follows that progression — the everyday puzzles, the
+no-pressure practice room, the solo difficulty ladder, the endless run,
+and the bot showdown — with a one-glance blurb under every option.
 
 **Daily Challenge** uses a deterministic word-of-the-day, so everyone on
 the planet fights the same word. **Survival** is an endless gauntlet:
@@ -141,6 +146,14 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.1.1** — the verdict rail: every played row now shows its grade,
+  kept-count and percentile in the space right of the tiles (phones keep
+  the compact line under the keyboard); more breathing room between the
+  board and the keyboard; the duel bot "thinks" for a variable, human
+  beat with a visible progress bar (longer when it's solving the
+  endgame); the Game-mode ? and the menu itself now carry one-glance
+  blurbs for every mode, ordered as a progression (everyday → practice →
+  difficulty ladder → survival → duel).
 - **1.5.1.0** — recursive reasoning: the Hard duel bot now *solves*
   the endgame by backward induction (minimax over the full alternating
   game tree) instead of a one-step heuristic — it reasons several moves
