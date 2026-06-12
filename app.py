@@ -27,7 +27,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.0"
+_EXPECTED_CORE_VERSION = "1.5.2.1"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -98,8 +98,9 @@ MODE_HELP = {
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
     "roulette": "After every guess the wheel spins a twist: bonus undos, "
-                "oracle clues, stolen abilities — the hidden word itself "
-                "may secretly change (the clues always stay true). "
+                "oracle clues, imp thefts, a growing points pot — the "
+                "hidden word itself may secretly change (the clues "
+                "always stay true). Never the same spin twice in a row. "
                 "6 guesses, 2 undos, 1 peek. 1.25× score.",
     "duel": "Hot potato vs the bot: you alternate guesses — whoever says "
             "the hidden word LOSES. No undos, 1 peek. 12 rows, you go "
@@ -195,13 +196,16 @@ def init_state() -> None:
     ss.setdefault("bot_pending", False)    # duel: bot replies next rerun
     ss.setdefault("duel_read", None)       # recursive endgame debrief
     ss.setdefault("nickname", "")          # active save slot ("" = guest)
-    ss.setdefault("games_total", 0)        # all-time finished games
+    ss.setdefault("games_total", 0)        # this profile's finished games
+    ss.setdefault("global_games", None)    # everyone's, from the server DB
     ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
     ss.setdefault("timer_on", False)       # 3-min-per-play countdown
     ss.setdefault("turn_deadline", None)   # epoch seconds for this play
     ss.setdefault("timer_strikes", 0)      # late plays this game
     ss.setdefault("spin_note", None)       # roulette: last wheel result
     ss.setdefault("spin_letter", None)     # roulette: forced letter
+    ss.setdefault("spin_pot", 0)           # roulette: bonus paid on a win
+    ss.setdefault("last_spin", None)       # roulette: no same spin twice
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -248,6 +252,8 @@ def reset_game_view_state() -> None:
     ss.last_action = None
     ss.spin_note = None
     ss.spin_letter = None
+    ss.spin_pot = 0
+    ss.last_spin = None
     ss.timer_strikes = 0
     ss.turn_deadline = (time.time() + TURN_SECONDS
                         if ss.get("timer_on") else None)
@@ -277,7 +283,56 @@ def duel_score(game: AvoidleGame) -> int:
 def game_score(game: AvoidleGame, mode: str) -> int:
     if mode == "duel":
         return duel_score(game) if player_won(game, mode) else 0
-    return game.score()
+    score = game.score()
+    if mode == "roulette" and score > 0:   # the wheel pot pays on a win
+        score += st.session_state.get("spin_pot", 0)
+    return score
+
+
+#: the leaderboard appears only once a critical mass of named players
+#: exists — a ranking of three people is just awkward
+LEADERBOARD_MIN = 5
+
+
+def _total_wins() -> int:
+    return sum(s["survived"] for s in st.session_state.stats.values())
+
+
+def _store():
+    """The shared server-side store (global odometer + nickname slots).
+    Returns None when persistence is unavailable — callers must treat
+    every store call as best-effort."""
+    try:
+        from avoidle.store import get_store
+        return get_store()
+    except Exception:
+        return None
+
+
+def _bump_global_games() -> None:
+    ss = st.session_state
+    try:
+        s = _store()
+        if s:
+            ss.global_games = s.bump_games(1)
+    except Exception:
+        pass
+
+
+def _heal_global_floor(*candidates) -> None:
+    """The worldwide odometer must never go backward: if a returning
+    visitor's cookie remembers a higher count than the server (fresh
+    file after a redeploy), lift the server to it. Self-healing, no
+    setup required."""
+    floor = max([c for c in candidates if isinstance(c, int)] or [0])
+    if floor <= 0:
+        return
+    try:
+        s = _store()
+        if s:
+            st.session_state.global_games = s.raise_games_floor(floor)
+    except Exception:
+        pass
 
 
 def mode_stats(mode: str) -> dict:
@@ -298,9 +353,10 @@ def record_result_if_final(force: bool = False) -> None:
     if game.status is GameStatus.WORDLED and game.can_undo() and not force:
         return
     ss.recorded = True
-    # the all-time odometer counts EVERY finished game (even practice
-    # replays) and only ever goes up — it is never reset
+    # the all-time odometers count EVERY finished game (even practice
+    # replays) and only ever go up — never reset
     ss.games_total = min(ss.get("games_total", 0) + 1, NUM_CAP)
+    _bump_global_games()
     # the session recap lists every finished game (even daily practice
     # replays, which are excluded from stats/XP below)
     ss.session_log = (ss.session_log + [{
@@ -512,20 +568,40 @@ def act_change_nick() -> None:
     old = ss.nickname
     if new == old:
         return
+    cookie_token, cookie_failed = None, False
     try:
-        token = st.context.cookies.get(profile_cookie(new))
+        cookie_token = st.context.cookies.get(profile_cookie(new))
     except Exception:
-        # can't read the cookie jar right now: abort the switch rather
-        # than risk overwriting an existing slot with a blank one
+        cookie_failed = True
+    s, db_token = None, None
+    try:
+        s = _store()
+        db_token = s.load_profile(new) if s else None
+    except Exception:
+        pass
+    if cookie_failed and db_token is None:
+        # neither source readable: abort the switch rather than risk
+        # overwriting an existing slot with a blank one
         ss.nick_input = old
         ss.message = ("error", "Couldn't open that save slot — try again.")
         return
     ss.pending_cookie_saves[profile_cookie(old)] = encode_progress()
+    # bank the old slot server-side too, so it's reachable cross-device
+    if old:
+        try:
+            if s:
+                s.save_profile(old,
+                               ss.pending_cookie_saves[profile_cookie(old)],
+                               xp=ss.xp, wins=_total_wins())
+        except Exception:
+            pass
     ss.nickname = new
     shown = new or "guest"
-    payload = decode_progress(token) if token else None
+    payload = _freshest_payload(db_token, cookie_token)
     if payload:
         apply_progress(payload)
+        _heal_global_floor(payload.get("global_seen", 0),
+                           payload.get("games_total", 0))
         ss.message = ("ok", f"👤 Welcome back, **{shown}** — "
                             "your progress is loaded.")
     else:
@@ -618,18 +694,26 @@ WHEEL = [
     (2.0, "imp_steal"),
     (1.5, "shuffle"),
     (1.5, "handcuff"),
-    (1.5, "nothing"),
+    (1.5, "pot"),
+    (0.6, "jackpot"),
+    (1.3, "nothing"),
 ]
+
+POT_DROP = 25
 
 
 def _spin_wheel(game: AvoidleGame) -> str:
     """Roulette: after every surviving guess the wheel lands on a twist.
     All effects keep the game fair — a re-rolled secret still matches
-    every clue on the board (it's drawn from the consistent pool)."""
+    every clue on the board (it's drawn from the consistent pool). The
+    wheel never repeats itself back-to-back: streaks of the same event
+    feel broken, not random."""
     ss = st.session_state
     rng = game.rng
-    weights, events = zip(*WHEEL)
+    options = [(w, e) for w, e in WHEEL if e != ss.get("last_spin")]
+    weights, events = zip(*options)
     event = rng.choices(events, weights=weights, k=1)[0]
+    ss.last_spin = event
     cfg = game.config
     if event == "lucky_undo":
         game.config = dataclasses.replace(cfg, max_undos=cfg.max_undos + 1)
@@ -637,6 +721,16 @@ def _spin_wheel(game: AvoidleGame) -> str:
     if event == "gift_peek":
         game.config = dataclasses.replace(cfg, max_peeks=cfg.max_peeks + 1)
         return "🎰 → 🎁 Gift: the wheel grants you an **extra peek**!"
+    if event == "pot":
+        ss.spin_pot += POT_DROP
+        return (f"🎰 → 💰 The wheel drops **{POT_DROP} points** in your "
+                f"pot ({ss.spin_pot} riding) — paid out if you survive!")
+    if event == "jackpot":
+        ss.spin_pot += POT_DROP
+        game.config = dataclasses.replace(cfg, max_undos=cfg.max_undos + 1,
+                                          max_peeks=cfg.max_peeks + 1)
+        return (f"🎰 → 🌟 JACKPOT! An extra **undo**, an extra **peek** "
+                f"and **{POT_DROP} points** in the pot!")
     if event == "oracle":
         known = set(letter_knowledge(game))
         alphabet = {c for row in W.KEYBOARDS[ss.lang] for c in row}
@@ -934,6 +1028,7 @@ def encode_progress() -> str:
     payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
                "xp": ss.xp, "games_total": ss.get("games_total", 0),
+               "global_seen": ss.get("global_games") or 0,
                "achievements": sorted(ss.achievements),
                "daily_streaks": ss.daily_streaks,
                "daily_done": _recent(ss.daily_done, 30),
@@ -990,8 +1085,12 @@ def reset_progress_state() -> None:
 
 
 def _slug(nick) -> str:
-    """Nicknames are save-slot keys: lowercase letters/digits, max 16."""
-    return re.sub(r"[^a-z0-9]", "", str(nick).lower())[:16]
+    """Nicknames are save-slot keys: lowercase letters/digits, max 16.
+    Anything that isn't a real string (a corrupt or spoofed cookie
+    value) maps to the guest slot — junk must never mint a profile."""
+    if not isinstance(nick, str):
+        return ""
+    return re.sub(r"[^a-z0-9]", "", nick.lower())[:16]
 
 
 def profile_cookie(nick: str) -> str:
@@ -1028,21 +1127,40 @@ def save_progress_cookie() -> None:
         pass
 
 
+def _freshest_payload(*tokens) -> dict | None:
+    """Decode the candidate tokens (server DB and browser cookie may
+    both hold this slot) and keep the freshest — XP only ever grows, so
+    the higher-XP copy is the newer one."""
+    payloads = [p for p in (decode_progress(t) for t in tokens if t) if p]
+    if not payloads:
+        return None
+    return max(payloads, key=lambda p: (p.get("xp", 0),
+                                        p.get("games_total", 0)))
+
+
 def restore_progress_from_cookie() -> bool:
-    """On a brand-new session, resume the last active save slot."""
+    """On a brand-new session, resume the last active save slot — from
+    the server database (cross-device) and/or this browser's cookie,
+    whichever copy is freshest."""
     try:
         cookies = st.context.cookies
         nick = _slug(cookies.get(NICK_COOKIE, "") or "")
         st.session_state.nickname = nick
-        token = cookies.get(profile_cookie(nick))
+        cookie_token = cookies.get(profile_cookie(nick))
     except Exception:
-        return False
-    if not token:
-        return False
-    payload = decode_progress(token)
+        nick, cookie_token = "", None
+    db_token = None
+    try:
+        s = _store()
+        db_token = s.load_profile(nick) if s else None
+    except Exception:
+        pass
+    payload = _freshest_payload(db_token, cookie_token)
     if not payload:
         return False
     apply_progress(payload)
+    _heal_global_floor(payload.get("global_seen", 0),
+                       payload.get("games_total", 0))
     return True
 
 
@@ -1123,6 +1241,7 @@ def parse_stats_json(text: str) -> dict | None:
                 "survival_best": _num(data.get("survival_best", 0)),
                 "xp": _num(data.get("xp", 0), ACH.XP_CAP),
                 "games_total": _num(data.get("games_total", 0)),
+                "global_seen": _num(data.get("global_seen", 0)),
                 "achievements": achievements,
                 "daily_streaks": streaks,
                 "daily_done": done,
@@ -1801,10 +1920,11 @@ def main() -> None:
         st.text_input("👤 Nickname (save slot)", key="nick_input",
                       max_chars=16, placeholder="optional — keeps your scores",
                       on_change=act_change_nick,
-                      help="Progress is saved in this browser per "
-                           "nickname. Type the same name next time to "
-                           "pick up your stats, XP and streaks exactly "
-                           "where you left them. Letters and digits only.")
+                      help="Your stats, XP and streaks are saved under "
+                           "this name — on the server and in this "
+                           "browser. Type the same name next time, on "
+                           "any device, to continue exactly where you "
+                           "left off. Letters and digits only.")
         st.divider()
         st.subheader("📊 Your stats")
         stats = ss.stats.get(
@@ -1823,6 +1943,33 @@ def main() -> None:
         st.markdown(render_streak_heatmap(), unsafe_allow_html=True)
         if ss.mode == "survival":
             st.metric("Best survival run", ss.survival_best)
+
+        # ----- leaderboard: appears once enough named players exist ----
+        lb = ss.get("_lb_cache")
+        if lb is None or time.time() - lb[0] > 60:
+            rows, n_players = [], 0
+            try:
+                s = _store()
+                if s:
+                    n_players = s.profile_count()
+                    if n_players >= LEADERBOARD_MIN:
+                        rows = s.leaderboard(10)
+            except Exception:
+                pass
+            lb = (time.time(), rows, n_players)
+            ss._lb_cache = lb
+        _, lb_rows, lb_n = lb
+        if lb_rows:
+            with st.expander(f"🏅 Leaderboard ({lb_n} players)"):
+                # 👑 not 🥇: medal emojis are post-2015 codepoints and
+                # tofu on older Windows fonts
+                for i, (nick, xp, wins) in enumerate(lb_rows):
+                    rank = "👑" if i == 0 else f"**{i + 1}.**"
+                    you = " ← you" if nick == ss.nickname else ""
+                    st.markdown(f"{rank} **{nick}** — {xp:,} XP · "
+                                f"{wins:,} wins{you}")
+                st.caption("Named players ranked by XP. Enter a nickname "
+                           "above to join the board.")
 
         never_played = not any(s["played"] for s in ss.stats.values())
         with st.expander("📖 How to play", expanded=never_played):
@@ -1873,9 +2020,21 @@ def main() -> None:
                     st.caption("✓ This backup is already loaded.")
 
         st.divider()
+        # the worldwide odometer: one number for every player, ever.
+        # Refreshed from the shared store at most every 30 s per session.
+        cache = ss.get("_global_cache")
+        if cache is None or time.time() - cache[0] > 30:
+            try:
+                s = _store()
+                if s:
+                    ss.global_games = s.games()
+            except Exception:
+                pass
+            ss._global_cache = (time.time(), ss.get("global_games"))
+        shown_global = max(ss.get("global_games") or 0, ss.games_total)
         st.markdown(
-            f'<div class="dw-odometer">🎮 <b>{ss.games_total:,}</b> games '
-            'played all-time</div>', unsafe_allow_html=True)
+            f'<div class="dw-odometer">🌍 <b>{shown_global:,}</b> games '
+            'played — by everyone, ever</div>', unsafe_allow_html=True)
         st.link_button("💬 Suggest a feature",
                        "mailto:edimant@sas.upenn.edu"
                        "?subject=Avoidle%20feature%20idea",
@@ -2110,15 +2269,19 @@ def main() -> None:
                 st.info(f"🔎 {_secret_reveal(game)}")
             elif game.status is GameStatus.SURVIVED:
                 bd = game.score_breakdown()
-                st.success(f"🎉 **You survived!** Score: **{bd['total']}**")
+                total = game_score(game, ss.mode)   # incl. any wheel pot
+                st.success(f"🎉 **You survived!** Score: **{total}**")
                 st.info(f"🔎 {_secret_reveal(game)} You dodged it for "
                         f"{game.guesses_made} guesses.")
                 floor_note = " — floored at the 10-point minimum" \
                     if bd["floored"] else ""
+                pot_note = (f" + 💰 {ss.spin_pot} wheel pot"
+                            if ss.mode == "roulette" and ss.spin_pot
+                            else "")
                 st.caption(f"{bd['base']} survival + {bd['tiles']} tile "
                            f"points − {bd['penalties']} help penalties, "
                            f"× {bd['multiplier']:g} {game.config.label} "
-                           f"bonus{floor_note}")
+                           f"bonus{floor_note}{pot_note}")
         else:
             if getattr(game, "forfeited", False):
                 st.error(f"⏰ **The clock won this one.** "
@@ -2201,6 +2364,14 @@ def main() -> None:
 
     if ss.get("progress_dirty"):
         save_progress_cookie()
+        if ss.nickname:   # named slots also live server-side (cross-device)
+            try:
+                s = _store()
+                if s:
+                    s.save_profile(ss.nickname, encode_progress(),
+                                   xp=ss.xp, wins=_total_wins())
+            except Exception:
+                pass
         ss.progress_dirty = False
 
     # animations are one-shot: replay only after the next qualifying action

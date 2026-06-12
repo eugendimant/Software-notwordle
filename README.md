@@ -146,6 +146,18 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.2.1** — the world plays together: a **server-side database**
+  (self-creating SQLite, zero setup; auto-upgrades to any external DB if
+  a `DATABASE_URL` secret ever exists) now holds a **🌍 worldwide
+  games odometer** counting every finished game by every visitor — it
+  self-heals from returning players' cookies and never goes backward —
+  plus **cross-device nickname slots** (type your name on any device to
+  continue; freshest copy of cookie vs. server wins) and a
+  **🏅 leaderboard** (top names by XP and wins) that appears once a
+  critical mass of 5 named players exists. Roulette got richer too:
+  💰 a growing points pot paid out on survival, a rare 🌟 jackpot, and
+  the wheel never lands on the same twist twice in a row. Hardened:
+  junk cookie values can never mint a save slot.
 - **1.5.2.0** — the wheel, the clock and the name: new **🎰 Roulette**
   mode (after every guess the wheel spins a twist — bonus undos, oracle
   clues, imp thefts, a forced letter, or the hidden word itself secretly

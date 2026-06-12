@@ -1257,6 +1257,8 @@ def test_nickname_slug_and_cookie_names():
     import app as app_module
     assert app_module._slug("Eugen! 23") == "eugen23"
     assert app_module._slug("x" * 40) == "x" * 16
+    assert app_module._slug(None) == ""        # junk never mints a slot
+    assert app_module._slug(12345) == ""
     assert app_module.profile_cookie("") == "dw_progress"   # legacy guest
     assert app_module.profile_cookie("Ben") == "dw_p_ben"
 
@@ -1299,3 +1301,92 @@ def test_review_shows_safe_alternative_for_fatal_move():
     assert not at.exception
     blob = " ".join(str(md.value) for md in at.markdown)
     assert "safe instead" in blob
+
+
+# ----------------------------------------------------------------------
+# v1.5.2.1: worldwide odometer + roulette wheel upgrades
+# ----------------------------------------------------------------------
+def test_global_counter_counts_across_everyone():
+    from avoidle.store import get_store
+    at = make_app()
+    before = get_store().games()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)   # finished game
+    assert at.session_state["global_games"] == before + 1
+    assert get_store().games() == before + 1     # server-side, shared
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "by everyone, ever" in blob
+
+
+def test_global_floor_heals_after_a_wiped_store():
+    from avoidle.store import SqliteStore
+    import os
+    import tempfile
+    s = SqliteStore(os.path.join(
+        tempfile.mkdtemp(prefix="avoidle-floor-"), "s.db"))
+    # a returning visitor's cookie remembers 500 games; the fresh file
+    # resumes from there instead of embarrassing everyone with a zero
+    assert s.raise_games_floor(500) == 500
+    assert s.bump_games() == 501
+
+
+def test_roulette_wheel_never_repeats_back_to_back():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    game.rng = _random.Random(7)
+    prev = None
+    for _ in range(5):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        pool = [w for w in game.remaining_words
+                if w != game.secret and (not demanded or demanded in w)]
+        if not pool:
+            break
+        guess(at, pool[0])
+        if at.session_state["game"].is_over:
+            break
+        ev = at.session_state["last_spin"]
+        assert ev is not None
+        if prev is not None:
+            assert ev != prev          # the wheel never repeats itself
+        prev = ev
+        assert at.session_state["spin_pot"] >= 0
+
+
+def test_roulette_pot_pays_out_only_on_survival():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    game.rng = _random.Random(11)
+    for _ in range(6):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        pool = [w for w in game.remaining_words
+                if w != game.secret and (not demanded or demanded in w)]
+        if not pool:
+            break
+        guess(at, pool[0])
+    game = at.session_state["game"]
+    if game.status is GameStatus.SURVIVED:
+        pot = at.session_state["spin_pot"]
+        recorded = at.session_state["stats"]["roulette:en:5"]["best_score"]
+        assert recorded == game.score() + pot
+
+
+def test_leaderboard_appears_once_critical_mass_is_reached():
+    import app as app_module
+    from avoidle.store import get_store
+    s = get_store()
+    for i in range(app_module.LEADERBOARD_MIN):
+        s.save_profile(f"player{i}", "x", xp=1000 + i, wins=i)
+    at = make_app()
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "👑" in blob            # the board rendered, leader crowned
+    assert "player" in blob and "XP" in blob
