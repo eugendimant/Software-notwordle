@@ -26,7 +26,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.0.19"
+_EXPECTED_CORE_VERSION = "1.5.1.0"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -163,6 +163,7 @@ def init_state() -> None:
     ss.setdefault("session_log", [])       # recap of finished games
     ss.setdefault("bot_level", "normal")   # duel opponent strength
     ss.setdefault("bot_pending", False)    # duel: bot replies next rerun
+    ss.setdefault("duel_read", None)       # recursive endgame debrief
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -202,6 +203,7 @@ def reset_game_view_state() -> None:
     ss.celebrated = False
     ss.ratings = []
     ss.review = None
+    ss.duel_read = None
     ss.kbd_buffer = ""
     ss.game_unlocks = []
     ss.bot_pending = False
@@ -630,6 +632,20 @@ def act_review() -> None:
                     actual_retained=len(game.pool_before(i + 1)))
         for i, t in list(enumerate(game.history))[::step]
     ]
+    ss.duel_read = _duel_recursive_read(game) if ss.mode == "duel" else None
+
+
+def _duel_recursive_read(game: AvoidleGame) -> str | None:
+    """Backward-induction debrief: the earliest of YOUR moves from which
+    the game was a provable forced win, per the recursive solver."""
+    from avoidle.endgame import forced_win_plies
+    for i in range(0, len(game.history), 2):        # player rows only
+        plies = forced_win_plies(game.pool_before(i), game.secret)
+        if plies is not None:
+            return (f"♟️ Recursive read: from move {i // 2 + 1} the duel was "
+                    f"a **forced win** — optimal play corners the bot in "
+                    f"{plies // 2} of your move(s).")
+    return None
 
 
 def _reseed_daily_rng(facility: str) -> None:
@@ -1424,8 +1440,9 @@ def main() -> None:
                          index=levels.index(ss.bot_level), key="bot_select",
                          format_func=lambda k: BOT.BOT_LEVELS[k],
                          on_change=act_change_bot,
-                         help="Harder bots avoid likely secrets — and pay "
-                              "a bigger score multiplier when beaten.")
+                         help="Hard solves the endgame by backward "
+                              "induction (it reasons several moves ahead); "
+                              "tougher bots pay a bigger multiplier.")
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
         # retention nudge: today's daily for this combo is still unplayed
         today_key = (f"{datetime.date.today().isoformat()}:"
@@ -1561,10 +1578,14 @@ def main() -> None:
     if ss.get("bot_pending") and ss.mode == "duel" and not game.is_over:
         # the player's row just rendered above; give the bot a visible
         # moment to "think", then let it reply and rerun
-        st.markdown('<div class="dw-status ok dw-think">👾 thinking'
+        from avoidle.endgame import MAX_SOLVE_POOL
+        deep = (ss.bot_level == "hard"
+                and game.remaining_count <= MAX_SOLVE_POOL)
+        verb = "solving the endgame" if deep else "thinking"
+        st.markdown(f'<div class="dw-status ok dw-think">👾 {verb}'
                     '<span>.</span><span>.</span><span>.</span></div>',
                     unsafe_allow_html=True)
-        time.sleep(0.55)
+        time.sleep(0.7 if deep else 0.5)
         ss.bot_pending = False
         _bot_reply()
         st.rerun()
@@ -1721,6 +1742,8 @@ def main() -> None:
                 st.button("Analyze my game", on_click=act_review,
                           type="secondary")
             else:
+                if ss.get("duel_read"):
+                    st.markdown(ss.duel_read)
                 rows = (game.history[0::2] if ss.mode == "duel"
                         else game.history)
                 for i, (t, r) in enumerate(zip(rows, ss.review), 1):

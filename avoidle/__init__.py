@@ -7,6 +7,6 @@ you toward the answer. Survive to win.
 
 # four components, bumped right-to-left: the LAST digit increments with
 # every iteration; earlier digits move only for genuinely larger steps
-__version__ = "1.5.0.19"
+__version__ = "1.5.1.0"
 __author__ = "Eugen Dimant"
 __homepage__ = "https://eugendimant.github.io"

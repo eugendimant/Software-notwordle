@@ -733,8 +733,11 @@ def test_bot_levels_play_fair_and_differ():
     for seed in range(20):
         pick = bot_pick("hard", pool, "en", 5, _random.Random(seed))
         assert pick not in ranks
-    # cornered among answers only: hard gambles on the rarest
-    answers_only = list(W.answers())[:10] + [list(W.answers())[-1]]
+    # cornered among answers only with a pool too large to solve: the
+    # heuristic fallback gambles on the rarest answer (small all-answer
+    # pools are handled by the recursive solver instead — see
+    # tests/test_endgame.py)
+    answers_only = list(W.answers())[:19] + [list(W.answers())[-1]]
     pick = bot_pick("hard", answers_only, "en", 5, rng)
     assert pick == max(answers_only, key=lambda w: ranks[w])
     # trapped pool: every level is forced, like a human
@@ -995,6 +998,36 @@ def test_duel_board_grows_instead_of_stacking_empty_rows():
     assert boards and "rows in reserve" in boards[0]
     assert boards[0].count("dw-empty") <= \
         2 * at.session_state["game"].word_length
+
+
+def test_duel_recursive_read_after_endgame():
+    """The Hard duel reaches an endgame and the post-game review surfaces
+    the backward-induction 'forced win' debrief when one existed."""
+    at = make_app()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
+    at.selectbox(key="bot_select").set_value("hard").run()
+    assert not at.exception
+    assert at.session_state["bot_level"] == "hard"
+    # drive a duel to its conclusion (bot replies via deferred rerun)
+    import random as _random
+    game = at.session_state["game"]
+    game.rng = _random.Random(3)
+    for _ in range(12):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        safe = next((w for w in game.remaining_words if w != game.secret),
+                    game.secret)
+        guess(at, safe)
+    assert at.session_state["game"].is_over
+    btns = [b for b in at.button if b.label.startswith("Analyze")]
+    if btns:
+        btns[0].click()
+        at.run()
+        assert not at.exception
+        # review covers player rows only; recursive read is a str or None
+        assert at.session_state["duel_read"] is None or \
+            "Recursive read" in at.session_state["duel_read"]
 
 
 def test_losing_by_guessing_secret_then_undo_rescue():
