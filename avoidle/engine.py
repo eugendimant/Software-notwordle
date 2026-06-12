@@ -325,16 +325,22 @@ class AvoidleGame:
     EMOJI = {GREEN: "🟩", YELLOW: "🟨", GRAY: "⬜"}
 
     def share_text(self, title: str = "Avoidle",
-                   won: bool | None = None) -> str:
-        """Emoji result card. ``won`` overrides the outcome line for modes
-        with their own win semantics (e.g. duels won by the opponent's
-        blunder)."""
+                   won: bool | None = None, score: int | None = None,
+                   guesses: int | None = None) -> str:
+        """Emoji result card. ``won``/``score``/``guesses`` override the
+        engine's view for modes with their own semantics (duels won by
+        the opponent's blunder score app-side, and only the player's
+        rows count as guesses)."""
         if won is None:
             won = self.status is GameStatus.SURVIVED
+        if score is None:
+            score = self.score()
+        if guesses is None:
+            guesses = self.guesses_made
         outcome = "I SURVIVED 🎉" if won else "I said the word 💀"
         undo_word = "undo" if self.undos_used == 1 else "undos"
         lines = [f"{title} — {outcome}",
-                 f"{self.guesses_made}/{self.config.max_guesses} guesses · "
-                 f"{self.undos_used} {undo_word} · score {self.score()}"]
+                 f"{guesses}/{self.config.max_guesses} guesses · "
+                 f"{self.undos_used} {undo_word} · score {score}"]
         lines += ["".join(self.EMOJI[c] for c in t.feedback) for t in self.history]
         return "\n".join(lines)

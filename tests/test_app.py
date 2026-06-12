@@ -892,14 +892,76 @@ def test_stale_game_object_is_healed_on_rerun():
     assert at.session_state["game"].guesses_made == 1
 
 
+def test_rating_failure_never_desyncs_or_blocks_recording():
+    """If move analysis explodes AFTER a successful submit, the move must
+    still count fully: ratings aligned, buffer cleared, game recorded."""
+    import avoidle.analysis as analysis
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    orig = analysis.rate_move
+
+    def boom(*a, **k):
+        raise RuntimeError("rating exploded")
+    try:
+        analysis.rate_move = boom
+        guess(at, "aahed")
+    finally:
+        analysis.rate_move = orig
+    game = at.session_state["game"]
+    assert game.guesses_made == 1
+    assert len(at.session_state["ratings"]) == 1     # fallback rating kept
+    assert at.session_state["ratings"][0].retained == game.remaining_count
+    # and a game-ending guess under failure still records stats + XP
+    try:
+        analysis.rate_move = boom
+        for word in ("beaks", "clame", "coate", "crape", "crare"):
+            guess(at, word)
+    finally:
+        analysis.rate_move = orig
+    assert at.session_state["game"].status is GameStatus.SURVIVED
+    assert at.session_state["stats"]["daily:en:5"]["played"] == 1
+    assert at.session_state["xp"] > 0
+    blob = " ".join(str(el.value) for el in at.success)
+    assert "Achievement unlocked" in blob            # banners not wiped
+
+
+def test_mode_switch_rolls_back_on_failure():
+    """A failed board build must never leave one mode's setting pointing
+    at another mode's game (duel chrome over a daily board)."""
+    import avoidle.words as words
+    at = make_app()
+    assert at.session_state["mode"] == "daily"
+    orig = words.random_secret
+
+    def boom(*a, **k):
+        raise RuntimeError("word list hiccup")
+    try:
+        words.random_secret = boom
+        at.radio(key="mode_label").set_value("🤖 Duel").run()
+    finally:
+        words.random_secret = orig
+    assert not at.exception
+    ss = at.session_state
+    assert ss["mode"] == "daily"                     # rolled back
+    assert ss["game"].config.label == "Daily"        # consistent pair
+    # and the next guess plays as a daily — no bot reply appears
+    game = ss["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    assert at.session_state["game"].guesses_made == 1
+
+
 def test_losing_by_guessing_secret_then_undo_rescue():
     at = make_app()
     secret = at.session_state["game"].secret
     guess(at, secret)
     game = at.session_state["game"]
     assert game.status is GameStatus.WORDLED
-    # loss with undos left must NOT be recorded yet
-    assert at.session_state["stats"]["daily:en:5"]["played"] == 0
+    # loss with undos left must NOT be recorded yet (key may not even
+    # exist — viewing stats no longer creates zero entries)
+    assert at.session_state["stats"].get(
+        "daily:en:5", {}).get("played", 0) == 0
     button(at, "↩️ Undo that fatal guess").click()
     at.run()
     assert not at.exception
