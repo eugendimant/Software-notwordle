@@ -36,9 +36,12 @@ toward the one word you must not say. Survive all your guesses and you win.
 **Daily Challenge** uses a deterministic word-of-the-day, so everyone on
 the planet fights the same word. **Survival** is an endless gauntlet:
 every round costs you an undo and raises the score multiplier — one loss
-ends the run. **🤖 Duel** is hot potato against a fair bot: alternate
-guesses, whoever says the word loses (simulated baseline: 52% player
-win rate — skill tips it further).
+ends the run. **🤖 Duel** is hot potato against a fair bot at three
+strengths — 😴 Easy, 🤖 Normal, 🧠 Hard (validated over 24,000 simulated
+duels: 59% / 42% / 36% player win rate for a naive player, 72% / 57% /
+50% for a skilled one; tougher bots pay bigger score multipliers).
+Every bot plays with public information only — it can genuinely
+blunder into the secret.
 
 ## Abilities
 
@@ -132,6 +135,13 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.0.12** — duel bots got a difficulty ladder: 😴 Easy (reckless,
+  gravitates toward likely secrets), 🤖 Normal (dodges the likeliest
+  quartile), 🧠 Hard (plays provably-safe non-answer words while they
+  exist); all fair — public info only. Balance validated over 24,000
+  simulated duels (4,000 per cell, naive and skilled players); Easy
+  re-tuned from 51% to 59% beginner win rate; win multipliers 1×/1.5×/
+  2.5× by strength; selector in the sidebar restarts the duel fairly.
 - **1.5.0.11** — top-3 improvement round: 💾 automatic progress
   persistence (compressed browser cookie, auto-restored on fresh
   sessions — streaks finally survive a page refresh); 🤖 Duel mode

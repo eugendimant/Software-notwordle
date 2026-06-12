@@ -17,6 +17,7 @@ import streamlit.components.v1 as components
 
 from dontwordle import __homepage__, __version__
 from dontwordle import achievements as ACH
+from dontwordle import bot as BOT
 from dontwordle import analysis as A
 from dontwordle import words as W
 from dontwordle.engine import (
@@ -52,7 +53,8 @@ MODE_HELP = {
              "6 guesses, 5 undos, 1 hint, 1 peek.",
     "classic": "Random word. 6 guesses, 5 undos, 1 hint, 1 peek.",
     "duel": "Hot potato vs the bot: you alternate guesses — whoever says "
-            "the hidden word LOSES. No undos. 12 rows, you go first.",
+            "the hidden word LOSES. No undos. 12 rows, you go first. "
+            "Pick the bot's strength below the mode selector.",
     "hard": "6 guesses, only 2 undos, no hints, 1 peek. 1.5× score.",
     "impossible": "SEVEN guesses to survive, zero undos, zero help. 2.5× score.",
     "survival": "Endless gauntlet: each round you lose one undo. "
@@ -139,6 +141,7 @@ def init_state() -> None:
     ss.setdefault("wins_langs", set())
     ss.setdefault("wins_lengths", set())
     ss.setdefault("session_log", [])       # recap of finished games
+    ss.setdefault("bot_level", "normal")   # duel opponent strength
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -167,9 +170,10 @@ def player_won(game: DontWordleGame, mode: str) -> bool:
 
 def duel_score(game: DontWordleGame) -> int:
     """Score for a duel won by the bot's blunder (engine score is 0
-    because the game technically ended WORDLED)."""
-    return round((100 + 12 * game.guesses_made)
-                 * DUEL_CONFIG.score_multiplier)
+    because the game technically ended WORDLED). Tougher bots pay more."""
+    mult = BOT.BOT_MULTIPLIER.get(st.session_state.get("bot_level",
+                                                       "normal"), 1.5)
+    return round((100 + 12 * game.guesses_made) * mult)
 
 
 def game_score(game: DontWordleGame, mode: str) -> int:
@@ -329,6 +333,14 @@ def act_new_game(next_round: bool = False) -> None:
     ss.last_action = "new"
 
 
+def act_change_bot() -> None:
+    _ensure_state()
+    ss = st.session_state
+    record_result_if_final(force=True)
+    ss.bot_level = ss.bot_select
+    act_new_game()
+
+
 def act_change_mode() -> None:
     _ensure_state()
     ss = st.session_state
@@ -434,7 +446,8 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
         ss.message = ("win", "🎉 You SURVIVED! You never said the word.")
     elif ss.mode == "duel":
         # the bot answers immediately — and may blunder into the secret
-        bot_word = game.rng.choice(game.remaining_words)
+        bot_word = BOT.bot_pick(ss.bot_level, game.remaining_words,
+                                ss.lang, game.word_length, game.rng)
         game.submit(bot_word)
         if game.status is GameStatus.WORDLED:
             ss.message = ("win", f"🤖 The bot said “{bot_word.upper()}” — "
@@ -1180,6 +1193,14 @@ def main() -> None:
                  key="mode_label", on_change=act_change_mode,
                  help="Changing mode starts a fresh game.")
         st.caption(MODE_HELP[ss.mode])
+        if ss.mode == "duel":
+            levels = list(BOT.BOT_LEVELS)
+            st.selectbox("Bot strength", levels,
+                         index=levels.index(ss.bot_level), key="bot_select",
+                         format_func=lambda k: BOT.BOT_LEVELS[k],
+                         on_change=act_change_bot,
+                         help="Harder bots avoid likely secrets — and pay "
+                              "a bigger score multiplier when beaten.")
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
         # retention nudge: today's daily for this combo is still unplayed
         today_key = (f"{datetime.date.today().isoformat()}:"
@@ -1271,11 +1292,11 @@ def main() -> None:
             f'{game.config.max_undos} undo(s) this round</span></div>',
             unsafe_allow_html=True)
     elif ss.mode == "duel" and not game.is_over:
-        turn_txt = "your move" if game.guesses_made % 2 == 0 \
-            else "bot is thinking…"
-        st.markdown(f'<div class="dw-banner">🤖 Duel '
-                    f'<span class="sub">— whoever says the word loses · '
-                    f'{turn_txt}</span></div>', unsafe_allow_html=True)
+        level_icon = BOT.BOT_LEVELS[ss.bot_level].split(" ")[0]
+        st.markdown(f'<div class="dw-banner">🤖 Duel vs {level_icon} '
+                    f'{ss.bot_level.title()} <span class="sub">— whoever '
+                    f'says the word loses · your move</span></div>',
+                    unsafe_allow_html=True)
     elif ss.mode == "daily":
         streak = ss.daily_streaks.get(
             f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)

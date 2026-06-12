@@ -719,6 +719,44 @@ def test_duel_mode_full_flow():
         assert stats["best_score"] == app_module.duel_score(game)
 
 
+def test_bot_levels_play_fair_and_differ():
+    import random as _random
+    from dontwordle import words as W
+    from dontwordle.bot import bot_pick, _answer_rank, BOT_LEVELS
+    ranks = _answer_rank("en", 5)
+    pool = list(W.allowed_guesses())[:400] + list(W.answers())[:50]
+    rng = _random.Random(1)
+    for level in BOT_LEVELS:
+        pick = bot_pick(level, pool, "en", 5, rng)
+        assert pick in pool
+    # hard always plays a provably-safe non-answer word when one exists
+    for seed in range(20):
+        pick = bot_pick("hard", pool, "en", 5, _random.Random(seed))
+        assert pick not in ranks
+    # cornered among answers only: hard gambles on the rarest
+    answers_only = list(W.answers())[:10] + [list(W.answers())[-1]]
+    pick = bot_pick("hard", answers_only, "en", 5, rng)
+    assert pick == max(answers_only, key=lambda w: ranks[w])
+    # trapped pool: every level is forced, like a human
+    for level in BOT_LEVELS:
+        assert bot_pick(level, ["crane"], "en", 5, rng) == "crane"
+
+
+def test_duel_bot_strength_selector():
+    from dontwordle.bot import BOT_MULTIPLIER
+    at = make_app()
+    at.radio(key="mode_label").set_value("🤖 Duel").run()
+    assert not at.exception
+    assert at.session_state["bot_level"] == "normal"
+    at.selectbox(key="bot_select").set_value("hard").run()
+    assert not at.exception
+    assert at.session_state["bot_level"] == "hard"
+    assert at.session_state["game"].guesses_made == 0  # fresh duel
+    # harder bots pay more when beaten
+    assert BOT_MULTIPLIER["hard"] > BOT_MULTIPLIER["normal"] \
+        > BOT_MULTIPLIER["easy"]
+
+
 def test_duel_player_blunder_is_a_loss():
     import app as app_module
     at = make_app()
