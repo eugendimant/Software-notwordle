@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import functools
 import json
 import random
 import zlib
@@ -150,6 +151,20 @@ def init_state() -> None:
     ss.setdefault("celebrated", False)
     ss.setdefault("daily_done", set())  # {"YYYY-MM-DD:lang:len"} counted
     ss.setdefault("daily_win_dates", set())  # daily WINS, for the heatmap
+    # self-heal after a redeploy: session objects created by an older
+    # version of the code (different class identity) are rebuilt
+    if "game" in ss and not isinstance(ss.game, AvoidleGame):
+        del ss["game"]
+        ss.ratings, ss.review = [], None
+        ss.message = ("ok", "✨ Avoidle was updated — fresh board, "
+                            "progress kept.")
+        ss.recorded = False
+        ss.kbd_buffer = ""
+    if any(not isinstance(r, A.MoveRating) for r in ss.get("ratings", [])):
+        ss.ratings = []
+    if ss.get("review") and any(not isinstance(r, A.MoveRating)
+                                for r in ss.review):
+        ss.review = None
     if not ss.get("_cookie_checked"):
         ss._cookie_checked = True
         if not ss.stats and ss.xp == 0:   # only a truly fresh session
@@ -309,9 +324,33 @@ def _ensure_state() -> None:
         init_state()
 
 
+def _safe(fn):
+    """No callback may ever crash the app. Catches everything our code
+    can raise — including exceptions from STALE session objects created
+    by a previous deploy, whose classes no longer match the freshly
+    imported ones (the except-clause misses them by identity)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if type(e).__module__.startswith("streamlit"):
+                raise  # never swallow Streamlit control flow
+            ss = st.session_state
+            if type(e).__name__ == "InvalidGuess":
+                ss["message"] = ("error", getattr(e, "reason", str(e)))
+                ss["last_action"] = "error"
+            else:
+                ss["message"] = ("error",
+                                 "⚠️ That move hiccuped — your progress is "
+                                 "safe. Try again or start a new game.")
+    return wrapper
+
+
 # ----------------------------------------------------------------------
 # Actions (widget callbacks)
 # ----------------------------------------------------------------------
+@_safe
 def act_new_game(next_round: bool = False) -> None:
     _ensure_state()
     ss = st.session_state
@@ -336,6 +375,7 @@ def act_new_game(next_round: bool = False) -> None:
     ss.last_action = "new"
 
 
+@_safe
 def act_change_bot() -> None:
     _ensure_state()
     ss = st.session_state
@@ -344,6 +384,7 @@ def act_change_bot() -> None:
     act_new_game()
 
 
+@_safe
 def act_change_mode() -> None:
     _ensure_state()
     ss = st.session_state
@@ -354,6 +395,7 @@ def act_change_mode() -> None:
     act_new_game()
 
 
+@_safe
 def act_change_lang() -> None:
     _ensure_state()
     ss = st.session_state
@@ -364,6 +406,7 @@ def act_change_lang() -> None:
     act_new_game()
 
 
+@_safe
 def act_change_len() -> None:
     _ensure_state()
     ss = st.session_state
@@ -374,6 +417,7 @@ def act_change_len() -> None:
     act_new_game()
 
 
+@_safe
 def act_change_input() -> None:
     _ensure_state()
     ss = st.session_state
@@ -381,12 +425,14 @@ def act_change_input() -> None:
     ss.kbd_buffer = ""
 
 
+@_safe
 def act_submit() -> None:
     _ensure_state()
     word = st.session_state.get("guess_input", "").strip().lower()
     _process_guess(word, clear_input=True)
 
 
+@_safe
 def act_key(letter: str) -> None:
     _ensure_state()
     ss = st.session_state
@@ -394,12 +440,14 @@ def act_key(letter: str) -> None:
         ss.kbd_buffer += letter
 
 
+@_safe
 def act_backspace() -> None:
     _ensure_state()
     ss = st.session_state
     ss.kbd_buffer = ss.kbd_buffer[:-1]
 
 
+@_safe
 def act_kbd_enter() -> None:
     _ensure_state()
     ss = st.session_state
@@ -408,6 +456,7 @@ def act_kbd_enter() -> None:
         ss.kbd_buffer = ""
 
 
+@_safe
 def act_accept_fate() -> None:
     """Trapped with no way out — play the only word left and take the L."""
     _ensure_state()
@@ -480,6 +529,7 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     record_result_if_final()
 
 
+@_safe
 def act_random_start() -> None:
     """Fill the box with a random opening word (first guess only, like the
     original's 'Random Starting Word'). Mid-game randomness could land on
@@ -498,6 +548,7 @@ def act_random_start() -> None:
             ss.guess_input = word
 
 
+@_safe
 def act_undo() -> None:
     _ensure_state()
     ss = st.session_state
@@ -513,6 +564,7 @@ def act_undo() -> None:
         ss.message = ("error", "No undos available.")
 
 
+@_safe
 def act_review() -> None:
     """Post-game: find the best word for every row (exact where feasible)."""
     _ensure_state()
@@ -538,6 +590,7 @@ def _reseed_daily_rng(facility: str) -> None:
                          f":{facility}:{ss.game.guesses_made}")
 
 
+@_safe
 def act_hint() -> None:
     _ensure_state()
     ss = st.session_state
@@ -557,6 +610,7 @@ def act_hint() -> None:
         ss.message = ("error", "No hint available.")
 
 
+@_safe
 def act_peek() -> None:
     _ensure_state()
     ss = st.session_state
@@ -649,10 +703,17 @@ def save_progress_cookie() -> None:
     token = encode_progress()
     if len(token) > 3800:   # stay under the 4 KB cookie ceiling
         return
-    components.html(
-        f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
-        "max-age=31536000; path=/; SameSite=Lax';</script>",
-        height=0)
+    try:
+        # components.html is deprecated but its replacement (st.iframe)
+        # cannot run inline scripts on the app origin; if a future
+        # Streamlit removes it, persistence degrades gracefully instead
+        # of crashing (the backup file always works).
+        components.html(
+            f"<script>document.cookie = '{PROGRESS_COOKIE}={token}; "
+            "max-age=31536000; path=/; SameSite=Lax';</script>",
+            height=0)
+    except Exception:
+        pass
 
 
 def restore_progress_from_cookie() -> bool:
@@ -787,16 +848,24 @@ CSS = """
                  U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F;
   font-display: swap;
 }
+/* Sans text elements get the flag font FIRST in the stack — it only
+   claims flag codepoints (unicode-range), everything else falls through
+   to the app's normal sans font. Never list a monospace fallback here:
+   Streamlit preloads Source Code Pro, and a wrong fallback order turns
+   the whole UI into typewriter text. */
 [data-baseweb="select"] div, [role="listbox"] li, [role="option"],
 [data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
 [data-testid="stWidgetLabel"] p, [data-testid="stCaptionContainer"] p,
-.dw-banner, .dw-footer, pre, code {
-  font-family: "Twemoji Country Flags", "Source Sans Pro", "Source Code Pro",
-               sans-serif;
+.dw-banner, .dw-footer {
+  font-family: "Twemoji Country Flags", "Source Sans", "Source Sans Pro",
+               "Source Sans 3", sans-serif;
+}
+pre, code {
+  font-family: "Twemoji Country Flags", "Source Code Pro", monospace;
 }
 /* rules popover: a tiny centered chip under the header */
-.st-key-rulesbar {display:flex; justify-content:center; margin:-6px 0 2px 0;}
-.st-key-rulesbar [data-testid="stPopover"] {width:auto;}
+.st-key-rulesbar {margin:-4px 0 0 0;}
+.st-key-rulesbar [data-testid="stPopover"] {width:auto; margin:0 auto;}
 .st-key-rulesbar [data-testid="stPopover"] button {
   font-size: 0.78rem;
   padding: 0.05rem 0.6rem;
@@ -813,13 +882,20 @@ CSS = """
 .dw-heat .today {outline:1.5px solid #b59f3b;}
 .dw-heat-lab {text-align:center; font-size:0.72rem; opacity:0.7;
               letter-spacing:0.08em; text-transform:uppercase;}
+/* sidebar: tighter vertical rhythm */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
+  gap: 0.65rem;
+}
+section[data-testid="stSidebar"] h1 {
+  font-size: 1.45rem; padding-bottom: 0;
+}
 /* feedback alerts: compact single-line text */
 [data-testid="stAlert"] [data-testid="stMarkdownContainer"] p {
   font-size: 0.88rem;
   line-height: 1.35;
 }
-.block-container {max-width: 720px;}
-.dw-header {text-align:center; margin:-10px 0 2px 0;}
+.block-container {max-width: 760px; padding-top: 3.2rem;}
+.dw-header {text-align:center; margin:-18px 0 0 0;}
 /* the Avoidle wordmark: game tiles spelling the name — AVOID on dark
    slate, LE on brand green, a thin red "do not cross" bar beneath */
 .dw-logo {display:inline-flex; gap:4px;}
@@ -831,17 +907,17 @@ CSS = """
                          inset 0 1px 0 rgba(255,255,255,0.07);}
 .dw-logo .lt.d {background:linear-gradient(180deg,#3f3f42,#2e2e30);}
 .dw-logo .lt.g {background:linear-gradient(180deg,#62a35b,#4a7f44);}
-.dw-logo-bar {width:178px; height:3px; margin:5px auto 3px auto;
+.dw-logo-bar {width:178px; height:3px; margin:4px auto 2px auto;
               border-radius:2px;
               background:linear-gradient(90deg,transparent,#e74c3c 18%,
                                          #e74c3c 82%,transparent);}
-.dw-header p {margin:0; opacity:0.65; font-size:0.85rem;
-              letter-spacing:0.28em; text-transform:uppercase;}
-.dw-banner {text-align:center; font-weight:700; font-size:1.05rem;
-            margin:2px 0 6px 0;}
+.dw-header p {margin:0 0 2px 0; opacity:0.6; font-size:0.78rem;
+              letter-spacing:0.26em; text-transform:uppercase;}
+.dw-banner {text-align:center; font-weight:700; font-size:1.0rem;
+            margin:0 0 2px 0;}
 .dw-banner .sub {opacity:0.7; font-weight:400; font-size:0.9rem;}
 .dw-board {display:flex; flex-direction:column; gap:6px; align-items:center;
-           margin: 10px 0 4px 0;}
+           margin: 6px 0 4px 0;}
 .dw-row {display:flex; gap:6px;}
 .dw-tile {width:52px; height:52px; display:flex; align-items:center;
           justify-content:center; font-size:1.7rem; font-weight:800;
@@ -878,8 +954,8 @@ CSS = """
          font-weight:700; font-size:0.95rem; color:#fff;
          background:#818384; text-transform:uppercase;
          box-shadow:0 1.5px 0 rgba(0,0,0,0.4);}
-.dw-counts {display:flex; justify-content:center; gap:34px;
-            text-align:center; font-weight:700; margin-bottom:4px;}
+.dw-counts {display:flex; justify-content:center; gap:38px;
+            text-align:center; font-weight:700; margin:0 0 2px 0;}
 .dw-counts .lab {font-size:0.75rem; letter-spacing:0.1em; opacity:0.75;
                  text-transform:uppercase;}
 .dw-counts .num {font-size:1.9rem; line-height:1.15;}
@@ -1542,6 +1618,24 @@ def main() -> None:
     ss.last_action = None
 
 
+def _run_protected() -> None:
+    """Last line of defense: a render error shows a friendly recovery
+    panel instead of Streamlit's crash page. Streamlit's own control-flow
+    exceptions pass through untouched."""
+    try:
+        main()
+    except Exception as e:
+        if type(e).__module__.startswith("streamlit"):
+            raise
+        st.error("⚠️ Something went wrong while drawing the page — your "
+                 "progress is safe.")
+        ss = st.session_state
+        for key in ("game", "ratings", "review", "message", "kbd_buffer"):
+            ss.pop(key, None)
+        if st.button("🔄 Restart the board", type="primary"):
+            pass  # state cleared above; the rerun rebuilds everything
+
+
 # run under `streamlit run` / AppTest, but stay importable for unit tests
 if __name__ == "__main__" or st.runtime.exists():
-    main()
+    _run_protected()
