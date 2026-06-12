@@ -128,6 +128,27 @@ def test_recursive_bot_returns_none_above_threshold():
                               max_pool=14) is None
 
 
+def test_deadline_bounds_latency_and_falls_back():
+    """A pathological wide tree must abort by the wall-clock deadline and
+    let the bot fall back to its heuristic, never freezing the turn."""
+    from avoidle.endgame import SolveAborted, _next_pool
+    # a budget already past its deadline aborts on the first node
+    past = _Budget(10_000, time_budget=-1.0)
+    pool = tuple(sorted(W.allowed_guesses("en", 5))[:6])
+    with pytest.raises(SolveAborted):
+        solve(pool, pool[0], {}, past)
+    # the agent's worst case: a single-rhyme family. The move returns
+    # promptly (either a solved move or None -> heuristic fallback).
+    fam = sorted(w for w in W.allowed_guesses("en", 4)
+                 if w.endswith("ang"))[:14]
+    import time
+    t0 = time.perf_counter()
+    move = recursive_bot_move(fam, "en", 4, random.Random(0))
+    assert time.perf_counter() - t0 < 1.0          # bounded, not a freeze
+    assert move is None or move in fam
+    assert callable(_next_pool)
+
+
 @pytest.mark.parametrize("lang", list(W.LANGUAGES))
 def test_solver_runs_for_every_language(lang):
     rng = random.Random(hash(lang) & 0xFFFF)

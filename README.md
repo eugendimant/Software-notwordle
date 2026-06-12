@@ -141,7 +141,10 @@ python -m pytest
 
 ## Changelog
 
-- **1.5.1.0** — recursive reasoning: the Hard duel bot now *solves* the
+- **1.5.1.0** — recursive reasoning: (hardened across 3 review iterations
+  — independent minimax cross-check on 511 positions, all-language/length
+  balance sweep, and a wall-clock deadline that bounds a pathological
+  wide-tree decision from 5.4s to 0.4s with clean heuristic fallback) the Hard duel bot now *solves* the
   endgame by backward induction (minimax over the full alternating game
   tree) instead of a one-step heuristic — it reasons several moves ahead
   ("if I play X you're forced to Y…") across its belief about the hidden

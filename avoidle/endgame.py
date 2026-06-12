@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from functools import lru_cache
 
 from .engine import score_guess
@@ -32,16 +33,21 @@ from .engine import score_guess
 #: only engage the exact solver at or below this pool size — above it the
 #: tree is too wide and the caller falls back to the heuristic bot.
 MAX_SOLVE_POOL = 14
-#: hard ceiling on recursion nodes per decision, so a pathological tree
-#: can never stall a turn (caller falls back on overflow).
-NODE_BUDGET = 200_000
+#: hard ceiling on recursion nodes per decision (secondary guard).
+NODE_BUDGET = 400_000
+#: wall-clock deadline per decision — the real bound. The dominant cost
+#: is _next_pool (uncounted by the node budget), so on pathological wide
+#: trees we abort by time and fall back to the heuristic instead of
+#: freezing the turn for seconds.
+TIME_BUDGET_S = 0.40
 
 
 class _Budget:
-    __slots__ = ("n",)
+    __slots__ = ("n", "deadline")
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, time_budget: float = TIME_BUDGET_S):
         self.n = n
+        self.deadline = time.monotonic() + time_budget
 
 
 class SolveAborted(Exception):
@@ -72,7 +78,7 @@ def solve(pool: tuple[str, ...], secret: str, memo: dict, budget: _Budget
     if cached is not None:
         return cached
     budget.n -= 1
-    if budget.n < 0:
+    if budget.n < 0 or time.monotonic() > budget.deadline:
         raise SolveAborted
     mover_loses = True
     win_plies = None                 # fastest way to force the opponent
@@ -101,7 +107,8 @@ def forced_win_plies(pool, secret: str,
     if not (1 <= len(pool) <= max_pool):
         return None
     try:
-        mover_loses, plies = solve(pool, secret, {}, _Budget(NODE_BUDGET))
+        mover_loses, plies = solve(pool, secret, {},
+                                   _Budget(NODE_BUDGET, time_budget=0.6))
     except SolveAborted:
         return None
     return None if mover_loses else plies
@@ -143,11 +150,12 @@ def recursive_bot_move(pool: list[str], lang: str, length: int,
     try:
         for s, weight in hyps.items():
             memo: dict = {}
+            solve(ptuple, s, memo, budget)   # populates the whole subtree
             for w in ptuple:
                 if w == s:
                     continue         # playing w==s loses this hypothesis
-                opp_loses, _ = solve(_next_pool(ptuple, w, s), s, memo,
-                                     budget)
+                child = _next_pool(ptuple, w, s)
+                opp_loses = True if len(child) == 1 else memo[(child, s)][0]
                 if opp_loses:        # opponent forced to say it -> bot wins
                     win_prob[w] += weight
     except SolveAborted:
