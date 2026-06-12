@@ -21,7 +21,7 @@ from . import words as W
 BOT_LEVELS = {
     "easy": "😴 Easy — picks any playable word, blunders happily",
     "normal": "🤖 Normal — avoids the likeliest secrets",
-    "hard": "♟️ Hard — plays provably-safe words while they exist",
+    "hard": "♟️ Hard — reasons recursively about the endgame",
 }
 
 #: score multiplier for duel wins, by opponent strength
@@ -42,7 +42,14 @@ def bot_pick(level: str, pool: list[str], lang: str, length: int,
         return pool[0]  # trapped: forced, exactly like a human
     ranks = _answer_rank(lang, length)
     if level == "hard":
-        # non-answer words can never be the secret: provably safe
+        # endgame: solve the alternating game by backward induction over
+        # the bot's belief about the secret (fair — no secret access)
+        from .endgame import recursive_bot_move
+        recursive = recursive_bot_move(pool, lang, length, rng)
+        if recursive is not None:
+            return recursive
+        # mid-game (pool too large to solve): non-answer words can never
+        # be the secret, so they are provably safe
         safe = [w for w in pool if w not in ranks]
         if safe:
             return rng.choice(safe)

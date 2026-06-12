@@ -26,7 +26,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.0.18"
+_EXPECTED_CORE_VERSION = "1.5.1.0"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -163,6 +163,7 @@ def init_state() -> None:
     ss.setdefault("session_log", [])       # recap of finished games
     ss.setdefault("bot_level", "normal")   # duel opponent strength
     ss.setdefault("bot_pending", False)    # duel: bot replies next rerun
+    ss.setdefault("duel_read", None)       # recursive endgame debrief
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -202,6 +203,7 @@ def reset_game_view_state() -> None:
     ss.celebrated = False
     ss.ratings = []
     ss.review = None
+    ss.duel_read = None
     ss.kbd_buffer = ""
     ss.game_unlocks = []
     ss.bot_pending = False
@@ -630,6 +632,20 @@ def act_review() -> None:
                     actual_retained=len(game.pool_before(i + 1)))
         for i, t in list(enumerate(game.history))[::step]
     ]
+    ss.duel_read = _duel_recursive_read(game) if ss.mode == "duel" else None
+
+
+def _duel_recursive_read(game: AvoidleGame) -> str | None:
+    """Backward-induction debrief: the earliest of YOUR moves from which
+    the game was a provable forced win, per the recursive solver."""
+    from avoidle.endgame import forced_win_plies
+    for i in range(0, len(game.history), 2):        # player rows only
+        plies = forced_win_plies(game.pool_before(i), game.secret)
+        if plies is not None:
+            return (f"♟️ Recursive read: from move {i // 2 + 1} the duel was "
+                    f"a **forced win** — optimal play corners the bot in "
+                    f"{plies // 2} of your move(s).")
+    return None
 
 
 def _reseed_daily_rng(facility: str) -> None:
@@ -921,8 +937,11 @@ pre, code {
   flex-wrap: nowrap !important; align-items: center;
 }
 .st-key-rulesbar [data-testid="stColumn"] {min-width: 0 !important;}
+.st-key-rulesbar [data-testid="stColumn"]:last-child {
+  display:flex; justify-content:flex-end;
+}
 .st-key-rulesbar [data-testid="stPopover"] {width:auto;}
-.st-key-rulesbar .dw-banner {text-align:left; margin:0;}
+.st-key-rulesbar .dw-banner {text-align:center; margin:0;}
 .st-key-rulesbar [data-testid="stPopover"] button {
   font-size: 0.78rem;
   padding: 0.05rem 0.6rem;
@@ -939,6 +958,11 @@ pre, code {
 .dw-heat .today {outline:1.5px solid #b59f3b;}
 .dw-heat-lab {text-align:center; font-size:0.72rem; opacity:0.7;
               letter-spacing:0.08em; text-transform:uppercase;}
+/* sidebar stats: one tidy line instead of cramped metric tiles */
+.dw-mini-stats {display:flex; justify-content:space-between; gap:8px;
+                font-size:0.78rem; opacity:0.9; margin:2px 0 4px 0;}
+.dw-mini-stats span {white-space:nowrap;}
+.dw-mini-stats b {font-size:0.95rem;}
 /* sidebar: tighter vertical rhythm */
 section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {
   gap: 0.65rem;
@@ -1043,13 +1067,13 @@ section[data-testid="stSidebar"] h1 {
                  text-transform:uppercase;}
 .dw-counts .num {font-size:1.45rem; line-height:1.1;}
 .dw-bar {height:5px; border-radius:3px; background:#262628;
-         margin:0 auto 0 auto; max-width:420px; overflow:hidden;}
+         margin:0 auto 0 auto; max-width:300px; overflow:hidden;}
 .dw-bar .dw-fill {height:100%; border-radius:4px;
                   transition:width .5s ease;}
 .dw-trapped {animation: dw-pulse 1s ease infinite;}
 @keyframes dw-pulse {50% {opacity:0.45;}}
-.dw-footer {text-align:center; opacity:0.8; font-size:0.85rem;
-            margin-top:18px;}
+.dw-footer {text-align:center; opacity:0.7; font-size:0.8rem;
+            margin-top:28px;}
 @media (max-width: 480px) {
   .dw-tile {width:38px; height:38px; font-size:1.25rem;}
   .dw-row {gap:4px;}
@@ -1070,23 +1094,24 @@ section[data-testid="stSidebar"] h1 {
    keyboard row to stay a single horizontal flex line — and keep the
    whole keyboard compact and centered like a phone keyboard rather
    than sprawling across the desktop page. */
-.st-key-clickkbd {max-width: 480px; margin: 0 auto;}
+.st-key-clickkbd {max-width: 580px; margin: 0 auto;}
 .st-key-clickkbd [data-testid="stVerticalBlock"] {gap: 0.22rem !important;}
 .st-key-clickkbd [data-testid="stHorizontalBlock"] {
   flex-wrap: nowrap !important;
-  gap: 0.18rem !important;
+  gap: 5px !important;
+  justify-content: center;   /* shorter rows center like a real keyboard */
   margin-bottom: 0;
 }
 .st-key-clickkbd [data-testid="stColumn"] {
   min-width: 0 !important;
-  flex: 1 1 0% !important;
-  width: auto !important;
+  flex: 0 0 42px !important;  /* constant key size on every row */
+  width: 42px !important;
 }
 .st-key-clickkbd .stButton > button {
-  width: 100% !important;
+  width: 42px !important;
   min-width: 0 !important;
-  height: 2.15rem;
-  min-height: 2.15rem;
+  height: 2.3rem;
+  min-height: 2.3rem;
   padding: 0 !important;
   font-weight: 600;
   font-size: 0.95rem;
@@ -1094,9 +1119,14 @@ section[data-testid="stSidebar"] h1 {
   text-transform: uppercase;
 }
 @media (max-width: 480px) {
+  .st-key-clickkbd [data-testid="stColumn"] {
+    flex: 0 0 7.6vw !important;
+    width: 7.6vw !important;
+  }
   .st-key-clickkbd .stButton > button {
-    height: 2.6rem;       /* thumb-sized on actual phones */
-    min-height: 2.6rem;
+    width: 7.6vw !important;
+    height: 2.55rem;       /* thumb-sized on actual phones */
+    min-height: 2.55rem;
     font-size: 0.9rem;
   }
 }
@@ -1117,7 +1147,7 @@ section[data-testid="stSidebar"] h1 {
   padding: 0.25rem 0.1rem !important;
   font-size: 0.85rem;
   white-space: nowrap;
-  min-height: 2.2rem;
+  min-height: 2.3rem;   /* same line weight as the keyboard keys */
 }
 /* keep the guess box and its button side by side on phones too */
 .st-key-guessrow [data-testid="stHorizontalBlock"] {
@@ -1410,8 +1440,9 @@ def main() -> None:
                          index=levels.index(ss.bot_level), key="bot_select",
                          format_func=lambda k: BOT.BOT_LEVELS[k],
                          on_change=act_change_bot,
-                         help="Harder bots avoid likely secrets — and pay "
-                              "a bigger score multiplier when beaten.")
+                         help="Hard solves the endgame by backward "
+                              "induction (it reasons several moves ahead); "
+                              "tougher bots pay a bigger multiplier.")
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
         # retention nudge: today's daily for this combo is still unplayed
         today_key = (f"{datetime.date.today().isoformat()}:"
@@ -1431,13 +1462,15 @@ def main() -> None:
             f"{ss.mode}:{ss.lang}:{ss.word_len}",
             {"played": 0, "survived": 0, "streak": 0,
              "best_streak": 0, "best_score": 0})
-        c1, c2 = st.columns(2)
-        c1.metric("Played", stats["played"])
         rate = (stats["survived"] / stats["played"] * 100
                 if stats["played"] else 0)
-        c2.metric("Survival %", f"{rate:.0f}%")
-        c1.metric("Streak", stats["streak"])
-        c2.metric("Best score", stats["best_score"])
+        st.markdown(
+            f'<div class="dw-mini-stats">'
+            f'<span><b>{stats["played"]}</b> played</span>'
+            f'<span><b>{rate:.0f}%</b> wins</span>'
+            f'<span><b>{stats["streak"]}</b> streak</span>'
+            f'<span><b>{stats["best_score"]}</b> best</span></div>',
+            unsafe_allow_html=True)
         st.markdown(render_streak_heatmap(), unsafe_allow_html=True)
         if ss.mode == "survival":
             st.metric("Best survival run", ss.survival_best)
@@ -1500,7 +1533,7 @@ def main() -> None:
 
     # ----- top bar: rules chip + mode banner share one compact row ----
     with st.container(key="rulesbar"):
-        c_rules, c_banner = st.columns([1.3, 7.7])
+        c_left, c_banner, c_rules = st.columns([1.4, 7.2, 1.4])
         with c_rules:
             with st.popover("❓ Rules"):
                 st.markdown(HOW_TO_MD)
@@ -1545,10 +1578,14 @@ def main() -> None:
     if ss.get("bot_pending") and ss.mode == "duel" and not game.is_over:
         # the player's row just rendered above; give the bot a visible
         # moment to "think", then let it reply and rerun
-        st.markdown('<div class="dw-status ok dw-think">👾 thinking'
+        from avoidle.endgame import MAX_SOLVE_POOL
+        deep = (ss.bot_level == "hard"
+                and game.remaining_count <= MAX_SOLVE_POOL)
+        verb = "solving the endgame" if deep else "thinking"
+        st.markdown(f'<div class="dw-status ok dw-think">👾 {verb}'
                     '<span>.</span><span>.</span><span>.</span></div>',
                     unsafe_allow_html=True)
-        time.sleep(0.55)
+        time.sleep(0.7 if deep else 0.5)
         ss.bot_pending = False
         _bot_reply()
         st.rerun()
@@ -1705,6 +1742,8 @@ def main() -> None:
                 st.button("Analyze my game", on_click=act_review,
                           type="secondary")
             else:
+                if ss.get("duel_read"):
+                    st.markdown(ss.duel_read)
                 rows = (game.history[0::2] if ss.mode == "duel"
                         else game.history)
                 for i, (t, r) in enumerate(zip(rows, ss.review), 1):
