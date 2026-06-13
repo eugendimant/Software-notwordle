@@ -1227,7 +1227,7 @@ def test_played_row_shows_a_word_definition(monkeypatch):
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
     # the gloss was looked up once and memoised in the session
-    assert at.session_state["defs"][safe] == "noun — A tall lifting machine."
+    assert at.session_state["defs"][safe] == "(noun) A tall lifting machine."
     # ...and embedded in the board for hover (title) and tap (the card)
     board = _board_html(at)
     assert "dw-defbox" in board and "tabindex" in board
@@ -1243,7 +1243,7 @@ def test_render_board_definition_states():
     guess(at, safe)
     game = at.session_state["game"]
     # a real gloss: interactive row + populated card
-    known = app_module.render_board(game, defs={safe: "noun — a thing"})
+    known = app_module.render_board(game, defs={safe: "(noun) a thing"})
     assert "dw-def" in known and "a thing" in known
     assert "dw-defbox-empty" not in known
     # looked up but nothing found: still interactive, but a muted note
@@ -1270,6 +1270,48 @@ def test_definitions_cover_the_duel_bots_word(monkeypatch):
         bot_word = game.history[1].guess
         assert bot_word in at.session_state["defs"]
         assert bot_word.upper() in _board_html(at)
+
+
+def test_definitions_are_in_the_language_being_played(monkeypatch):
+    import json
+    import urllib.error
+    from avoidle import definitions as D
+    D.define.cache_clear()
+    D.reset_circuit()
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        if "rest_v1" in url:                       # endpoint is en-only
+            raise urllib.error.HTTPError(url, 404, "x", {}, None)
+        return json.dumps({"parse": {"wikitext":
+                           ":[1] runde [[Frucht]] des [[Apfelbaum]]s\n"}}
+                          ).encode("utf-8")
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    at = make_app()
+    at.selectbox(key="lang_select").set_value("de").run()
+    assert at.session_state["lang"] == "de"
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    # the gloss is the German one, and every lookup hit the German wiki
+    assert at.session_state["defs"][safe] == "runde Frucht des Apfelbaums"
+    assert seen and all("de.wiktionary.org" in u for u in seen)
+
+
+def test_header_tagline_tells_you_not_to_say_the_word():
+    import app as app_module
+    assert "don't say the word" in app_module.HEADER
+    assert "never the word" not in app_module.HEADER
+
+
+def test_game_modes_are_listed_alphabetically():
+    import app as app_module
+    names = [label.split(" ", 1)[1] for label in app_module.MODES]
+    assert names == sorted(names)
+    # every mode kept its internal key and blurb through the reorder
+    assert set(app_module.MODES.values()) == set(app_module.MODE_BLURBS)
 
 
 def test_time_crunch_offers_selectable_lengths_with_sensible_default():

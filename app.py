@@ -28,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.2"
+_EXPECTED_CORE_VERSION = "1.5.2.3"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -60,17 +60,16 @@ from avoidle.engine import (
 # Modes
 # ----------------------------------------------------------------------
 MODES = {
-    # ordered as a progression: the everyday puzzles, the wildcard fun
-    # one, the no-pressure room, the solo difficulty ladder, the endless
-    # run, the showdown
-    "📅 Daily Challenge": "daily",
+    # listed alphabetically by name (the emoji is decorative only — the
+    # menu order follows this dict, nothing is keyed by position)
     "🎲 Classic": "classic",
-    "🎰 Roulette": "roulette",
-    "🧘 Zen": "zen",
+    "📅 Daily Challenge": "daily",
+    "🆚 Duel": "duel",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
+    "🎰 Roulette": "roulette",
     "⚔️ Survival": "survival",
-    "🆚 Duel": "duel",
+    "🧘 Zen": "zen",
 }
 
 #: one-glance blurbs shown under each mode option (and in the ? tooltip)
@@ -1628,7 +1627,7 @@ HEADER = """
     <span class="lt d">A</span><span class="lt d">V</span><span class="lt d">O</span><span class="lt d">I</span><span class="lt d">D</span><span class="lt g">L</span><span class="lt g">E</span>
   </div>
   <div class="dw-logo-bar"></div>
-  <p>guess words — never the word</p>
+  <p>whatever you do: don't say the word</p>
 </div>
 """
 
@@ -2013,7 +2012,7 @@ def main() -> None:
             ss[wkey] = truth
     with st.sidebar:
         st.title("🚫 Avoidle")
-        st.caption("Whatever you do — don't say the word.")
+        st.caption("Whatever you do: don't say the word.")
         lv = ACH.level_for_xp(ss.xp)
         nick_tag = f" · 👤 {ss.nickname}" if ss.nickname else ""
         st.progress(lv["into"] / lv["needed"],
