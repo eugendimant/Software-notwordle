@@ -28,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.3"
+_EXPECTED_CORE_VERSION = "1.5.2.4"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -1360,7 +1360,7 @@ pre, code {
   font-family: "Twemoji Country Flags", "Source Code Pro", monospace;
 }
 /* rules popover: a tiny centered chip under the header */
-.st-key-rulesbar {margin:0;}
+.st-key-rulesbar {margin:0 0 14px 0;}  /* breathing room before the stats */
 .st-key-rulesbar [data-testid="stHorizontalBlock"] {
   flex-wrap: nowrap !important; align-items: center;
 }
@@ -2262,23 +2262,6 @@ def main() -> None:
                     f'{ss.bot_level.title()} <span class="sub">— whoever '
                     f'says the word loses</span></div>',
                     unsafe_allow_html=True)
-    elif ss.mode == "daily":
-        streak = ss.daily_streaks.get(
-            f"{ss.lang}:{ss.word_len}", {}).get("streak", 0)
-        parts = [f'📅 Daily <span class="sub">'
-                 f'{datetime.date.today():%b %d}</span>']
-        if streak >= 2:
-            parts.append(f'<span class="sub">🔥 {streak}-day streak</span>')
-        if not game.is_over:
-            # use the date pinned at game creation so the banner and the
-            # award agree even across midnight
-            quest_date = (ss.get("daily_key")
-                          or datetime.date.today().isoformat()).split(":")[0]
-            quest = ACH.daily_quest(quest_date, ss.lang, ss.word_len)
-            parts.append(f'<span class="sub">🎯 {quest.label} '
-                         f'(+{quest.xp} XP)</span>')
-        c_banner.markdown(f'<div class="dw-banner">{" · ".join(parts)}</div>',
-                          unsafe_allow_html=True)
 
     st.markdown(render_meter(game), unsafe_allow_html=True)
     if ss.get("timer_on") and ss.get("turn_deadline") and not game.is_over:
