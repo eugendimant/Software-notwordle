@@ -1430,6 +1430,79 @@ def test_roulette_handcuff_blocks_words_without_the_letter():
         assert at.session_state["game"].guesses_made == 1
 
 
+def _roulette_seed_for(event, last=None):
+    """A seed whose first wheel spin lands on ``event`` (deterministic)."""
+    import random as _random
+    from app import WHEEL
+    opts = [(w, e) for w, e in WHEEL if e != last]
+    weights = [w for w, _ in opts]
+    events = [e for _, e in opts]
+    for s in range(50000):
+        if _random.Random(s).choices(events, weights=weights, k=1)[0] == event:
+            return s
+    raise AssertionError(f"no seed found for {event!r}")
+
+
+def _roulette_app():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    assert not at.exception
+    return at, _random
+
+
+def test_roulette_undo_reverts_a_wheel_gift_so_it_cant_be_farmed():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    base_undos = game.config.max_undos
+    game.rng = _random.Random(_roulette_seed_for("lucky_undo"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.config.max_undos == base_undos + 1     # the wheel gifted one
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.max_undos == base_undos         # undo took the gift back
+    assert at.session_state["spin_undo_stack"] == []   # stack stays aligned
+
+
+def test_roulette_undo_clears_a_taken_back_handcuff_demand():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    assert at.session_state["spin_letter"] is None
+    game.rng = _random.Random(_roulette_seed_for("handcuff"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    demand = at.session_state["spin_letter"]
+    assert demand                                      # a demand was imposed
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["spin_letter"] is None     # demand rolled back
+    # the stale demand must not lock the replacement guess
+    game = at.session_state["game"]
+    nomatch = next((w for w in game.remaining_words
+                    if w != game.secret and demand not in w), None)
+    if nomatch:
+        guess(at, nomatch)
+        assert at.session_state["game"].guesses_made == 1
+
+
+def test_roulette_undo_restores_a_reshuffled_secret():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    pre_secret = game.secret
+    game.rng = _random.Random(_roulette_seed_for("shuffle"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["game"].secret == pre_secret   # reroll undone
+
+
 def test_nickname_slug_and_cookie_names():
     import app as app_module
     assert app_module._slug("Eugen! 23") == "eugen23"
