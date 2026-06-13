@@ -527,11 +527,12 @@ def test_loss_gives_participation_xp_only():
     assert "first_win" not in at.session_state["achievements"]
 
 
-def test_daily_streak_and_quest_banner():
+def test_daily_streak_and_no_quest_banner():
     at = make_app()
-    # quest banner shows while playing the daily (merged into one line)
+    # the daily date/quest banner was removed: the top stays uncluttered
     page = " ".join(str(md.value) for md in at.markdown)
-    assert "🎯" in page and "XP)" in page
+    assert "🎯" not in page          # no quest banner above the board
+    assert "📅 Daily" not in page    # no date banner above the board
     game = at.session_state["game"]
     game.secret = "crane"
     for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
