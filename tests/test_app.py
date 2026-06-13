@@ -1227,7 +1227,7 @@ def test_played_row_shows_a_word_definition(monkeypatch):
     safe = next(w for w in game.remaining_words if w != game.secret)
     guess(at, safe)
     # the gloss was looked up once and memoised in the session
-    assert at.session_state["defs"][safe] == "noun — A tall lifting machine."
+    assert at.session_state["defs"][safe] == "(noun) A tall lifting machine."
     # ...and embedded in the board for hover (title) and tap (the card)
     board = _board_html(at)
     assert "dw-defbox" in board and "tabindex" in board
@@ -1243,7 +1243,7 @@ def test_render_board_definition_states():
     guess(at, safe)
     game = at.session_state["game"]
     # a real gloss: interactive row + populated card
-    known = app_module.render_board(game, defs={safe: "noun — a thing"})
+    known = app_module.render_board(game, defs={safe: "(noun) a thing"})
     assert "dw-def" in known and "a thing" in known
     assert "dw-defbox-empty" not in known
     # looked up but nothing found: still interactive, but a muted note
@@ -1270,6 +1270,48 @@ def test_definitions_cover_the_duel_bots_word(monkeypatch):
         bot_word = game.history[1].guess
         assert bot_word in at.session_state["defs"]
         assert bot_word.upper() in _board_html(at)
+
+
+def test_definitions_are_in_the_language_being_played(monkeypatch):
+    import json
+    import urllib.error
+    from avoidle import definitions as D
+    D.define.cache_clear()
+    D.reset_circuit()
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        if "rest_v1" in url:                       # endpoint is en-only
+            raise urllib.error.HTTPError(url, 404, "x", {}, None)
+        return json.dumps({"parse": {"wikitext":
+                           ":[1] runde [[Frucht]] des [[Apfelbaum]]s\n"}}
+                          ).encode("utf-8")
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    at = make_app()
+    at.selectbox(key="lang_select").set_value("de").run()
+    assert at.session_state["lang"] == "de"
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    # the gloss is the German one, and every lookup hit the German wiki
+    assert at.session_state["defs"][safe] == "runde Frucht des Apfelbaums"
+    assert seen and all("de.wiktionary.org" in u for u in seen)
+
+
+def test_header_tagline_tells_you_not_to_say_the_word():
+    import app as app_module
+    assert "don't say the word" in app_module.HEADER
+    assert "never the word" not in app_module.HEADER
+
+
+def test_game_modes_are_listed_alphabetically():
+    import app as app_module
+    names = [label.split(" ", 1)[1] for label in app_module.MODES]
+    assert names == sorted(names)
+    # every mode kept its internal key and blurb through the reorder
+    assert set(app_module.MODES.values()) == set(app_module.MODE_BLURBS)
 
 
 def test_time_crunch_offers_selectable_lengths_with_sensible_default():
@@ -1386,6 +1428,79 @@ def test_roulette_handcuff_blocks_words_without_the_letter():
     if withz:
         guess(at, withz)
         assert at.session_state["game"].guesses_made == 1
+
+
+def _roulette_seed_for(event, last=None):
+    """A seed whose first wheel spin lands on ``event`` (deterministic)."""
+    import random as _random
+    from app import WHEEL
+    opts = [(w, e) for w, e in WHEEL if e != last]
+    weights = [w for w, _ in opts]
+    events = [e for _, e in opts]
+    for s in range(50000):
+        if _random.Random(s).choices(events, weights=weights, k=1)[0] == event:
+            return s
+    raise AssertionError(f"no seed found for {event!r}")
+
+
+def _roulette_app():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    assert not at.exception
+    return at, _random
+
+
+def test_roulette_undo_reverts_a_wheel_gift_so_it_cant_be_farmed():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    base_undos = game.config.max_undos
+    game.rng = _random.Random(_roulette_seed_for("lucky_undo"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.config.max_undos == base_undos + 1     # the wheel gifted one
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.max_undos == base_undos         # undo took the gift back
+    assert at.session_state["spin_undo_stack"] == []   # stack stays aligned
+
+
+def test_roulette_undo_clears_a_taken_back_handcuff_demand():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    assert at.session_state["spin_letter"] is None
+    game.rng = _random.Random(_roulette_seed_for("handcuff"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    demand = at.session_state["spin_letter"]
+    assert demand                                      # a demand was imposed
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["spin_letter"] is None     # demand rolled back
+    # the stale demand must not lock the replacement guess
+    game = at.session_state["game"]
+    nomatch = next((w for w in game.remaining_words
+                    if w != game.secret and demand not in w), None)
+    if nomatch:
+        guess(at, nomatch)
+        assert at.session_state["game"].guesses_made == 1
+
+
+def test_roulette_undo_restores_a_reshuffled_secret():
+    at, _random = _roulette_app()
+    game = at.session_state["game"]
+    pre_secret = game.secret
+    game.rng = _random.Random(_roulette_seed_for("shuffle"))
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    button(at, "↩️ Undo").click()
+    at.run()
+    assert not at.exception
+    assert at.session_state["game"].secret == pre_secret   # reroll undone
 
 
 def test_nickname_slug_and_cookie_names():

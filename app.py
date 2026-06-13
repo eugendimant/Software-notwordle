@@ -28,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.2"
+_EXPECTED_CORE_VERSION = "1.5.2.3"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -60,17 +60,16 @@ from avoidle.engine import (
 # Modes
 # ----------------------------------------------------------------------
 MODES = {
-    # ordered as a progression: the everyday puzzles, the wildcard fun
-    # one, the no-pressure room, the solo difficulty ladder, the endless
-    # run, the showdown
-    "📅 Daily Challenge": "daily",
+    # listed alphabetically by name (the emoji is decorative only — the
+    # menu order follows this dict, nothing is keyed by position)
     "🎲 Classic": "classic",
-    "🎰 Roulette": "roulette",
-    "🧘 Zen": "zen",
+    "📅 Daily Challenge": "daily",
+    "🆚 Duel": "duel",
     "🔥 Hard": "hard",
     "💀 Impossible": "impossible",
+    "🎰 Roulette": "roulette",
     "⚔️ Survival": "survival",
-    "🆚 Duel": "duel",
+    "🧘 Zen": "zen",
 }
 
 #: one-glance blurbs shown under each mode option (and in the ? tooltip)
@@ -219,6 +218,7 @@ def init_state() -> None:
     ss.setdefault("spin_letter", None)     # roulette: forced letter
     ss.setdefault("spin_pot", 0)           # roulette: bonus paid on a win
     ss.setdefault("last_spin", None)       # roulette: no same spin twice
+    ss.setdefault("spin_undo_stack", [])   # roulette: per-guess wheel state
     ss.setdefault("message", None)     # (kind, text)
     ss.setdefault("hint_word", None)
     ss.setdefault("peek_words", None)
@@ -268,6 +268,7 @@ def reset_game_view_state() -> None:
     ss.spin_letter = None
     ss.spin_pot = 0
     ss.last_spin = None
+    ss.spin_undo_stack = []
     ss.timer_strikes = 0
     ss.turn_deadline = (time.time() + _turn_seconds()
                         if ss.get("timer_on") else None)
@@ -386,7 +387,11 @@ def record_result_if_final(force: bool = False) -> None:
         daily_key = ss.get("daily_key") or (
             f"{datetime.date.today().isoformat()}:{ss.lang}:{ss.word_len}")
         if daily_key in ss.daily_done:
-            return  # practice replay of a known word: don't farm stats
+            # practice replay of a known word: no stats/XP farming, but the
+            # odometer bump above still has to be flushed so it survives a
+            # reload (the counter counts every finished game)
+            ss.progress_dirty = True
+            return
         ss.daily_done.add(daily_key)
     ss.stats_upload_token = None  # stats changed; allow re-restoring a backup
     stats = mode_stats(ss.mode)
@@ -709,13 +714,13 @@ def _timer_overdue_penalty(game: AvoidleGame) -> str | None:
     cfg = game.config
     if cfg.max_hints > game.hints_used:
         game.config = dataclasses.replace(cfg, max_hints=cfg.max_hints - 1)
-        return "⏰ Over 3 minutes — the clock ate a **hint**."
+        return "⏰ Out of time! The clock ate a **hint**."
     if cfg.max_peeks > game.peeks_used:
         game.config = dataclasses.replace(cfg, max_peeks=cfg.max_peeks - 1)
-        return "⏰ Over 3 minutes — the clock ate a **peek**."
+        return "⏰ Out of time! The clock ate a **peek**."
     if cfg.max_undos > game.undos_used:
         game.config = dataclasses.replace(cfg, max_undos=cfg.max_undos - 1)
-        return "⏰ Over 3 minutes — the clock ate an **undo**."
+        return "⏰ Out of time! The clock ate an **undo**."
     game.forfeit()
     return None   # forfeit: the caller announces the loss itself
 
@@ -829,6 +834,16 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     ss.last_action = "guess"
     if clear_input:
         ss.guess_input = ""
+    # roulette: remember the wheel-affected state as it stands BEFORE this
+    # play's spin, so an undo can revert the spin's gifts/thefts/handcuff/
+    # pot/secret-reroll (config is captured after any timer toll, so that
+    # toll is preserved). One snapshot per played row, like the ratings.
+    if ss.mode == "roulette":
+        ss.spin_undo_stack.append({
+            "spin_letter": ss.spin_letter, "spin_note": ss.spin_note,
+            "spin_pot": ss.spin_pot, "last_spin": ss.last_spin,
+            "config": game.config, "secret": game.secret,
+        })
     # rate the player's move against the pool it was chosen from —
     # BEFORE any bot reply changes the board
     # (same seed/sample as act_review so live and review grades agree)
@@ -944,6 +959,17 @@ def act_undo() -> None:
         ss.message = ("ok", "↩️ Guess taken back. Choose more carefully…")
         if ss.ratings:
             ss.ratings.pop()
+        # roulette: roll back the wheel effects of the undone play so its
+        # gifts/pot/handcuff/secret-reroll can't be farmed by re-guessing,
+        # and a taken-back demand can't lock the replacement word
+        if ss.mode == "roulette" and ss.get("spin_undo_stack"):
+            snap = ss.spin_undo_stack.pop()
+            ss.spin_letter = snap["spin_letter"]
+            ss.spin_note = snap["spin_note"]
+            ss.spin_pot = snap["spin_pot"]
+            ss.last_spin = snap["last_spin"]
+            ss.game.config = snap["config"]
+            ss.game.secret = snap["secret"]
         ss.review = None  # any analysis refers to a board that no longer exists
         ss.hint_word = None
         ss.peek_words = None
@@ -1628,7 +1654,7 @@ HEADER = """
     <span class="lt d">A</span><span class="lt d">V</span><span class="lt d">O</span><span class="lt d">I</span><span class="lt d">D</span><span class="lt g">L</span><span class="lt g">E</span>
   </div>
   <div class="dw-logo-bar"></div>
-  <p>guess words — never the word</p>
+  <p>whatever you do: don't say the word</p>
 </div>
 """
 
@@ -2013,7 +2039,7 @@ def main() -> None:
             ss[wkey] = truth
     with st.sidebar:
         st.title("🚫 Avoidle")
-        st.caption("Whatever you do — don't say the word.")
+        st.caption("Whatever you do: don't say the word.")
         lv = ACH.level_for_xp(ss.xp)
         nick_tag = f" · 👤 {ss.nickname}" if ss.nickname else ""
         st.progress(lv["into"] / lv["needed"],

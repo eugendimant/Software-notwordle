@@ -1,10 +1,12 @@
-"""Tests for the best-effort word-definition lookup.
+"""Tests for the best-effort, multilingual word-definition lookup.
 
 The network is never touched: ``_http_get`` is monkeypatched so the
-parsing, caching, and circuit-breaker logic are exercised in isolation.
+parsing, multilingual fallback, caching, and circuit-breaker logic are
+exercised in isolation.
 """
 
 import json
+import urllib.error
 
 import pytest
 
@@ -21,35 +23,44 @@ def _clean_cache():
     D.reset_circuit()
 
 
-def _payload(lang="en", pos="Noun", definition="A wading bird."):
+def _rest_payload(lang="en", pos="Noun", definition="A wading bird."):
     return json.dumps({lang: [{
         "partOfSpeech": pos, "language": "English",
         "definitions": [{"definition": definition}],
     }]}).encode("utf-8")
 
 
+def _wikitext_payload(wikitext):
+    return json.dumps({"parse": {"wikitext": wikitext}}).encode("utf-8")
+
+
+def _http_error(code=404):
+    return urllib.error.HTTPError("http://x", code, "err", {}, None)
+
+
+# ---------------------------------------------------------------------------
+# cleaning / REST parsing
+# ---------------------------------------------------------------------------
 def test_clean_strips_markup_and_clamps_length():
     assert D._clean("  a <b>big</b>\n  bird ") == "a big bird"
-    long = "word " * 100
-    out = D._clean(long)
+    out = D._clean("word " * 100)
     assert len(out) <= D._MAX_LEN and out.endswith("…")
 
 
 def test_parse_prefers_the_played_language_and_prepends_pos():
-    out = D._parse(_payload("de", "Substantiv", "Ein Apfel."), "de")
-    assert out == "substantiv — Ein Apfel."
+    out = D._parse(_rest_payload("de", "Substantiv", "Ein Apfel."), "de")
+    assert out == "(substantiv) Ein Apfel."
 
 
 def test_parse_falls_back_to_any_section_when_language_absent():
-    # word only listed under a different code than the one requested
-    out = D._parse(_payload("en", "Verb", "to hurry"), "es")
-    assert out == "verb — to hurry"
+    out = D._parse(_rest_payload("en", "Verb", "to hurry"), "es")
+    assert out == "(verb) to hurry"
 
 
 def test_parse_skips_empty_definitions():
     blob = json.dumps({"en": [{"partOfSpeech": "Noun", "definitions": [
         {"definition": "   "}, {"definition": "<a>real</a> meaning"}]}]})
-    assert D._parse(blob.encode(), "en") == "noun — real meaning"
+    assert D._parse(blob.encode(), "en") == "(noun) real meaning"
 
 
 def test_parse_handles_junk_gracefully():
@@ -58,18 +69,137 @@ def test_parse_handles_junk_gracefully():
     assert D._parse(json.dumps({"en": "nope"}).encode(), "en") is None
 
 
-def test_define_fetches_parses_and_caches(monkeypatch):
+# ---------------------------------------------------------------------------
+# wikitext stripping
+# ---------------------------------------------------------------------------
+def test_strip_wikitext_unwraps_links_and_drops_templates():
+    raw = "a [[wading]] [[bird|birds]] {{lb|en|zoology}} that '''wades'''"
+    assert D._strip_wikitext(raw) == "a wading birds  that wades".replace(
+        "  ", " ")
+
+
+def test_strip_wikitext_clears_nested_templates_refs_and_entities():
+    raw = "fruit {{a|{{b|c}}}} of the tree<ref>Smith 2020</ref> &amp; more"
+    out = D._strip_wikitext(raw)
+    assert "{{" not in out and "}}" not in out
+    assert "<ref" not in out and "Smith" not in out
+    assert "& more" in out and "fruit" in out
+
+
+def test_strip_wikitext_takes_the_display_text_of_multi_pipe_links():
+    assert D._strip_wikitext("see [[a|b|caption]] now") == "see caption now"
+    assert "[[" not in D._strip_wikitext("[[File:x|thumb|left]] text")
+
+
+def test_via_wikitext_survives_a_malformed_parse_payload(monkeypatch):
+    monkeypatch.setattr(D, "_http_get",
+                        lambda u: b'{"parse": null}')
+    assert D._via_wikitext("x", "en") is None
+    monkeypatch.setattr(D, "_http_get",
+                        lambda u: b'{"error": {"code": "missingtitle"}}')
+    assert D._via_wikitext("x", "en") is None
+
+
+# ---------------------------------------------------------------------------
+# first-definition extraction per language convention
+# ---------------------------------------------------------------------------
+def test_first_definition_english_hash_lines():
+    wt = ("==English==\n===Noun===\n"
+          "# A large [[wading]] [[bird]].\n"
+          "#: {{ux|en|The crane stood still.}}\n"
+          "# A lifting [[machine]].\n")
+    assert D._first_definition(wt) == "A large wading bird."
+
+
+def test_first_definition_german_bracket_lines():
+    wt = ("== Apfel ({{Sprache|Deutsch}}) ==\n"
+          "{{Aussprache}}\n:{{IPA}} {{Lautschrift|ˈapfl̩}}\n"
+          "{{Bedeutungen}}\n"
+          ":[1] runde [[Frucht]] des [[Apfelbaum]]s\n"
+          ":[2] etwas Apfelförmiges\n")
+    assert D._first_definition(wt) == "runde Frucht des Apfelbaums"
+
+
+def test_first_definition_spanish_semicolon_lines():
+    wt = ("== {{lengua|es}} ==\n=== {{sustantivo masculino|es}} ===\n"
+          ";1 {{ámbito|Zoología}}: [[mamífero]] [[doméstico]] cánido\n"
+          ";2: persona despreciable\n")
+    assert D._first_definition(wt) == "mamífero doméstico cánido"
+
+
+def test_first_definition_russian_hash_with_piped_link():
+    wt = ("= {{-ru-}} =\n=== Значение ===\n"
+          "# [[печатное]] [[издание]] из [[сшитый|сшитых]] листов\n"
+          "#* ''цитата''\n")
+    assert D._first_definition(wt) == "печатное издание из сшитых листов"
+
+
+def test_first_definition_skips_empty_form_of_template_line():
+    wt = "# {{plural of|en|cat}}\n# a small domesticated [[feline]]\n"
+    assert D._first_definition(wt) == "a small domesticated feline"
+
+
+def test_first_definition_returns_none_without_any_definition():
+    assert D._first_definition("== Heading ==\nsome prose\n") is None
+
+
+# ---------------------------------------------------------------------------
+# define(): tiers, multilingual fallback, capitalisation, breaker
+# ---------------------------------------------------------------------------
+def test_define_uses_clean_rest_result_first(monkeypatch):
     calls = []
 
     def fake_get(url):
         calls.append(url)
-        return _payload("en", "Noun", "A tall machine for lifting.")
+        return _rest_payload("en", "Noun", "A tall lifting machine.")
 
     monkeypatch.setattr(D, "_http_get", fake_get)
-    assert D.define("crane", "en") == "noun — A tall machine for lifting."
-    assert D.define("crane", "en").startswith("noun")   # second call cached
-    assert len(calls) == 1                                # only one round trip
+    assert D.define("crane", "en") == "(noun) A tall lifting machine."
+    assert D.define("crane", "en").startswith("(noun)")   # cached
+    assert len(calls) == 1                                 # one round trip
     assert "en.wiktionary.org" in calls[0] and calls[0].endswith("crane")
+
+
+def test_define_falls_back_to_wikitext_when_rest_is_unavailable(monkeypatch):
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        if "rest_v1" in url:
+            raise _http_error(404)                 # endpoint not deployed
+        return _wikitext_payload(
+            ":[1] runde [[Frucht]] des [[Apfelbaum]]s\n")
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("apfel", "de") == "runde Frucht des Apfelbaums"
+    assert any("rest_v1" in u for u in seen)       # tried the clean path
+    assert any("api.php" in u for u in seen)       # then the fallback
+    assert all("de.wiktionary.org" in u for u in seen)  # in German
+
+
+def test_define_tries_the_capitalised_title_for_german_nouns(monkeypatch):
+    def fake_get(url):
+        if "rest_v1" in url:
+            raise _http_error(404)
+        if "page=Apfel" in url:                    # only the capitalised page
+            return _wikitext_payload(
+                ":[1] runde [[Frucht]] des [[Apfelbaum]]s\n")
+        return json.dumps({"error": {"code": "missingtitle"}}).encode()
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("apfel", "de") == "runde Frucht des Apfelbaums"
+
+
+def test_define_queries_the_players_language_wiktionary(monkeypatch):
+    hosts = []
+
+    def fake_get(url):
+        hosts.append(url)
+        raise _http_error(404)
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    D.define("perro", "es")
+    assert hosts and all("es.wiktionary.org" in u for u in hosts)
 
 
 def test_define_rejects_non_words_without_network(monkeypatch):
@@ -77,6 +207,15 @@ def test_define_rejects_non_words_without_network(monkeypatch):
                         lambda u: pytest.fail("must not fetch"))
     assert D.define("", "en") is None
     assert D.define("ab-cd", "en") is None
+
+
+def test_http_404_never_trips_the_circuit_breaker(monkeypatch):
+    monkeypatch.setattr(D, "_http_get", lambda u: (_ for _ in ()).throw(
+        _http_error(404)))
+    for w in ("alpha", "bravo", "charlie", "delta", "echo"):
+        assert D.define(w, "en") is None
+    assert not D._circuit_open               # 404 == server reachable
+    assert D._consecutive_fails == 0
 
 
 def test_circuit_breaker_stops_hammering_an_offline_host(monkeypatch):
@@ -87,25 +226,24 @@ def test_circuit_breaker_stops_hammering_an_offline_host(monkeypatch):
         raise OSError("no network")
 
     monkeypatch.setattr(D, "_http_get", boom)
-    # distinct alphabetic words so the lru_cache never short-circuits
     for w in ("alpha", "bravo", "charlie", "delta", "echo")[:D._FAIL_CAP]:
         assert D.define(w, "en") is None
     assert D._circuit_open
     before = attempts["n"]
-    assert D.define("anotherword", "en") is None   # circuit open: no fetch
+    assert D.define("another", "en") is None     # circuit open: no fetch
     assert attempts["n"] == before
 
 
-def test_clean_round_trip_re_arms_after_a_failure(monkeypatch):
+def test_a_clean_round_trip_re_arms_after_a_network_failure(monkeypatch):
     seq = [OSError("blip")]
 
     def flaky(url):
         if seq:
             raise seq.pop()
-        return _payload("en", "Noun", "ok now")
+        return _rest_payload("en", "Noun", "ok now")
 
     monkeypatch.setattr(D, "_http_get", flaky)
-    assert D.define("first", "en") is None       # one failure (not capped)
+    assert D.define("first", "en") is None
     assert D._consecutive_fails == 1
-    assert D.define("second", "en") == "noun — ok now"
-    assert D._consecutive_fails == 0             # success re-armed the count
+    assert D.define("second", "en") == "(noun) ok now"
+    assert D._consecutive_fails == 0

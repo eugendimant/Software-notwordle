@@ -146,6 +146,16 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.2.3** — definitions now speak your language: a **📖 row
+  definition is glossed in whichever language you're playing** (German
+  words explained in German, Spanish in Spanish, Russian in Russian),
+  because the lookup targets that language's own Wiktionary — with a
+  universal fallback that reads each Wiktionary's own definition markup,
+  and a capitalised-title retry so German nouns resolve. New title-page
+  and sidebar line: **"whatever you do: don't say the word."** Game modes
+  are now listed **alphabetically**. (Hardened along the way: the
+  definition circuit-breaker no longer trips on plain 404s, only on real
+  network failures.)
 - **1.5.2.2** — know your words, mind the clock: **📖 row definitions**
   — hover or tap any played row (yours *or* the duel bot's) to see a
   one-line gloss of what that word means, pulled best-effort from
