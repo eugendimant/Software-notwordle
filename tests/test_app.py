@@ -1151,3 +1151,242 @@ def test_version_and_homepage_in_sidebar():
     blob = rendered + sidebar_md
     assert __version__ in blob
     assert __homepage__ in blob
+
+
+# ----------------------------------------------------------------------
+# v1.5.2.0: turn timer, roulette mode, nickname slots, odometer
+# ----------------------------------------------------------------------
+def test_turn_timer_penalty_ladder_and_reset():
+    import time as _time
+    at = make_app()
+    at.toggle(key="timer_toggle").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["timer_on"] is True
+    assert at.session_state["turn_deadline"] is not None
+    # a play arriving past the deadline costs an ability (daily: the hint)
+    at.session_state["turn_deadline"] = _time.time() - 5
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.guesses_made == 1            # the late play still counts
+    assert game.config.max_hints == 0        # ...but the clock ate the hint
+    assert "clock ate" in at.session_state["message"][1]
+    assert at.session_state["turn_deadline"] > _time.time()  # clock restarted
+
+
+def test_turn_timer_locks_once_the_game_has_begun():
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    at.toggle(key="timer_toggle").set_value(True).run()
+    assert not at.exception
+    assert at.session_state["timer_on"] is False   # change rejected
+
+
+def test_turn_timer_forfeits_with_nothing_left_to_take():
+    import time as _time
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    at.toggle(key="timer_toggle").set_value(True).run()
+    at.session_state["turn_deadline"] = _time.time() - 5
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.is_over and game.forfeited
+    assert not app_module.player_won(game, "impossible")
+    assert at.session_state["stats"]["impossible:en:5"]["played"] == 1
+    assert at.session_state["stats"]["impossible:en:5"]["survived"] == 0
+
+
+def test_roulette_wheel_spins_and_keeps_the_game_fair():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    assert not at.exception
+    game = at.session_state["game"]
+    assert game.config.label == "Roulette"
+    game.rng = _random.Random(42)
+    for _ in range(4):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        if demanded:
+            safe = next((w for w in game.remaining_words
+                         if w != game.secret and demanded in w), None)
+        else:
+            safe = next((w for w in game.remaining_words
+                         if w != game.secret), None)
+        if safe is None:        # trapped or no word satisfies the demand
+            break
+        guess(at, safe)
+        game = at.session_state["game"]
+        # invariants the wheel must never break
+        assert game.secret in game.remaining_words
+        assert game.config.max_undos >= game.undos_used
+        assert game.config.max_hints >= game.hints_used
+        assert game.config.max_peeks >= game.peeks_used
+        if not game.is_over:
+            note = at.session_state["spin_note"]
+            assert note and note.startswith("🎰")
+
+
+def test_roulette_handcuff_blocks_words_without_the_letter():
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    at.session_state["spin_letter"] = "z"
+    safe = next(w for w in game.remaining_words
+                if w != game.secret and "z" not in w)
+    guess(at, safe)
+    game = at.session_state["game"]
+    assert game.guesses_made == 0
+    assert at.session_state["message"][0] == "error"
+    withz = next((w for w in game.remaining_words
+                  if w != game.secret and "z" in w), None)
+    if withz:
+        guess(at, withz)
+        assert at.session_state["game"].guesses_made == 1
+
+
+def test_nickname_slug_and_cookie_names():
+    import app as app_module
+    assert app_module._slug("Eugen! 23") == "eugen23"
+    assert app_module._slug("x" * 40) == "x" * 16
+    assert app_module._slug(None) == ""        # junk never mints a slot
+    assert app_module._slug(12345) == ""
+    assert app_module.profile_cookie("") == "dw_progress"   # legacy guest
+    assert app_module.profile_cookie("Ben") == "dw_p_ben"
+
+
+def test_nickname_switch_starts_a_fresh_slot():
+    at = make_app()
+    at.session_state["xp"] = 750
+    at.session_state["games_total"] = 9
+    at.text_input(key="nick_input").input("Ben")
+    at.run()
+    assert not at.exception
+    assert at.session_state["nickname"] == "ben"
+    # no cookie exists for "ben" in the test harness -> fresh slot
+    assert at.session_state["xp"] == 0
+    assert at.session_state["games_total"] == 0
+
+
+def test_games_total_odometer_counts_and_survives_roundtrip():
+    import app as app_module
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)   # instant final loss
+    assert at.session_state["games_total"] == 1
+    # the odometer survives the backup-file roundtrip, clamped like
+    # every numeric field
+    payload = app_module.parse_stats_json(
+        '{"stats": {}, "games_total": 7}')
+    assert payload["games_total"] == 7
+
+
+def test_review_shows_safe_alternative_for_fatal_move():
+    at = make_app()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)
+    assert at.session_state["game"].is_over
+    btns = [b for b in at.button if b.label.startswith("Analyze")]
+    assert btns
+    btns[0].click()
+    at.run()
+    assert not at.exception
+    blob = " ".join(str(md.value) for md in at.markdown)
+    assert "safe instead" in blob
+
+
+# ----------------------------------------------------------------------
+# v1.5.2.1: worldwide odometer + roulette wheel upgrades
+# ----------------------------------------------------------------------
+def test_global_counter_counts_across_everyone():
+    from avoidle.store import get_store
+    at = make_app()
+    before = get_store().games()
+    at.radio(key="mode_label").set_value("💀 Impossible").run()
+    guess(at, at.session_state["game"].secret)   # finished game
+    assert at.session_state["global_games"] == before + 1
+    assert get_store().games() == before + 1     # server-side, shared
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "by everyone, ever" in blob
+
+
+def test_global_floor_heals_after_a_wiped_store():
+    from avoidle.store import SqliteStore
+    import os
+    import tempfile
+    s = SqliteStore(os.path.join(
+        tempfile.mkdtemp(prefix="avoidle-floor-"), "s.db"))
+    # a returning visitor's cookie remembers 500 games; the fresh file
+    # resumes from there instead of embarrassing everyone with a zero
+    assert s.raise_games_floor(500) == 500
+    assert s.bump_games() == 501
+
+
+def test_roulette_wheel_never_repeats_back_to_back():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    game.rng = _random.Random(7)
+    prev = None
+    for _ in range(5):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        pool = [w for w in game.remaining_words
+                if w != game.secret and (not demanded or demanded in w)]
+        if not pool:
+            break
+        guess(at, pool[0])
+        if at.session_state["game"].is_over:
+            break
+        ev = at.session_state["last_spin"]
+        assert ev is not None
+        if prev is not None:
+            assert ev != prev          # the wheel never repeats itself
+        prev = ev
+        assert at.session_state["spin_pot"] >= 0
+
+
+def test_roulette_pot_pays_out_only_on_survival():
+    import random as _random
+    at = make_app()
+    at.radio(key="mode_label").set_value("🎰 Roulette").run()
+    game = at.session_state["game"]
+    game.rng = _random.Random(11)
+    for _ in range(6):
+        game = at.session_state["game"]
+        if game.is_over:
+            break
+        demanded = at.session_state["spin_letter"]
+        pool = [w for w in game.remaining_words
+                if w != game.secret and (not demanded or demanded in w)]
+        if not pool:
+            break
+        guess(at, pool[0])
+    game = at.session_state["game"]
+    if game.status is GameStatus.SURVIVED:
+        pot = at.session_state["spin_pot"]
+        recorded = at.session_state["stats"]["roulette:en:5"]["best_score"]
+        assert recorded == game.score() + pot
+
+
+def test_leaderboard_appears_once_critical_mass_is_reached():
+    import app as app_module
+    from avoidle.store import get_store
+    s = get_store()
+    for i in range(app_module.LEADERBOARD_MIN):
+        s.save_profile(f"player{i}", "x", xp=1000 + i, wins=i)
+    at = make_app()
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "👑" in blob            # the board rendered, leader crowned
+    assert "player" in blob and "XP" in blob

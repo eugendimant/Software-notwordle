@@ -302,3 +302,17 @@ def test_presets_sane():
 def test_bad_secret_rejected():
     with pytest.raises(ValueError):
         AvoidleGame("xyzzy!", words.allowed_guesses())
+
+
+def test_forfeit_is_a_final_unundoable_loss():
+    game = AvoidleGame("crane", words.allowed_guesses())
+    safe = next(w for w in game.remaining_words if w != "crane")
+    game.submit(safe)
+    game.forfeit()
+    assert game.is_over and game.status is GameStatus.WORDLED
+    assert game.forfeited
+    assert not game.can_undo()          # the clock doesn't run backward
+    assert not game.undo()
+    assert "ran out of time" in game.share_text()
+    game.forfeit()                       # idempotent on a finished game
+    assert game.forfeited
