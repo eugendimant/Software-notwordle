@@ -10,6 +10,7 @@ import base64
 import dataclasses
 import datetime
 import functools
+import html
 import json
 import random
 import re
@@ -27,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.1"
+_EXPECTED_CORE_VERSION = "1.5.2.2"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -41,6 +42,7 @@ from avoidle import __homepage__, __version__
 from avoidle import achievements as ACH
 from avoidle import bot as BOT
 from avoidle import analysis as A
+from avoidle import definitions as DEF
 from avoidle import words as W
 from avoidle.engine import (
     GRAY,
@@ -90,8 +92,17 @@ ROULETTE_CONFIG = GameConfig("Roulette", max_guesses=6, max_undos=2,
                              max_hints=0, max_peeks=1,
                              score_multiplier=1.25)
 
-#: the timer mode: seconds allowed per play, reset after every guess
-TURN_SECONDS = 180
+#: the timer mode: seconds allowed per play, reset after every guess.
+#: TURN_SECONDS is the default; players pick from TIMER_CHOICES below.
+TURN_SECONDS = 120
+#: selectable "time crunch" lengths, fastest first (seconds -> label)
+TIMER_CHOICES = {
+    30: "⚡ 30 sec — blitz",
+    60: "🏃 1 min — brisk",
+    120: "🚶 2 min — steady",
+    180: "🧘 3 min — relaxed",
+    300: "🐢 5 min — leisurely",
+}
 
 MODE_HELP = {
     "daily": "One shared puzzle per day — same secret word for everyone. "
@@ -178,6 +189,7 @@ def init_state() -> None:
     ss.setdefault("input_mode", "click")  # clickable keyboard by default
     ss.setdefault("kbd_buffer", "")      # letters picked on the clickable kbd
     ss.setdefault("ratings", [])       # live MoveRating per row
+    ss.setdefault("defs", {})          # word -> one-line gloss (or None)
     ss.setdefault("review", None)      # post-game best-move analysis
     ss.setdefault("last_action", None)  # drives reveal/shake animations
     ss.setdefault("mode", "daily")
@@ -199,7 +211,8 @@ def init_state() -> None:
     ss.setdefault("games_total", 0)        # this profile's finished games
     ss.setdefault("global_games", None)    # everyone's, from the server DB
     ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
-    ss.setdefault("timer_on", False)       # 3-min-per-play countdown
+    ss.setdefault("timer_on", False)       # per-play countdown on/off
+    ss.setdefault("turn_seconds", TURN_SECONDS)  # chosen seconds per play
     ss.setdefault("turn_deadline", None)   # epoch seconds for this play
     ss.setdefault("timer_strikes", 0)      # late plays this game
     ss.setdefault("spin_note", None)       # roulette: last wheel result
@@ -244,6 +257,7 @@ def reset_game_view_state() -> None:
     ss.recorded = False
     ss.celebrated = False
     ss.ratings = []
+    ss.defs = {}            # glosses belong to this board's words only
     ss.review = None
     ss.duel_read = None
     ss.kbd_buffer = ""
@@ -255,8 +269,13 @@ def reset_game_view_state() -> None:
     ss.spin_pot = 0
     ss.last_spin = None
     ss.timer_strikes = 0
-    ss.turn_deadline = (time.time() + TURN_SECONDS
+    ss.turn_deadline = (time.time() + _turn_seconds()
                         if ss.get("timer_on") else None)
+
+
+def _turn_seconds() -> int:
+    """The chosen per-play allowance, falling back to the default."""
+    return int(st.session_state.get("turn_seconds") or TURN_SECONDS)
 
 
 def player_won(game: AvoidleGame, mode: str) -> bool:
@@ -621,8 +640,23 @@ def act_toggle_timer() -> None:
         return
     ss.timer_on = bool(ss.get("timer_toggle"))
     ss.timer_strikes = 0
-    ss.turn_deadline = (time.time() + TURN_SECONDS
+    ss.turn_deadline = (time.time() + _turn_seconds()
                         if ss.timer_on and not ss.game.is_over else None)
+
+
+@_safe
+def act_change_turn_seconds() -> None:
+    """Pick a new per-play allowance — only honored before the first
+    word (the widget is locked once the game has begun)."""
+    _ensure_state()
+    ss = st.session_state
+    if ss.game.guesses_made > 0 and not ss.game.is_over:
+        ss.turn_seconds_select = _turn_seconds()   # snap back; it's locked
+        return
+    chosen = ss.get("turn_seconds_select", TURN_SECONDS)
+    ss.turn_seconds = int(chosen) if chosen in TIMER_CHOICES else TURN_SECONDS
+    if ss.timer_on and not ss.game.is_over:
+        ss.turn_deadline = time.time() + ss.turn_seconds
 
 
 @_safe
@@ -664,7 +698,7 @@ def act_accept_fate() -> None:
 
 
 def _timer_overdue_penalty(game: AvoidleGame) -> str | None:
-    """The play arrived after the 3-minute deadline: strip one ability
+    """The play arrived after the deadline: strip one ability
     (hint -> peek -> undo); with nothing left to take, the game is
     forfeited. Returns the penalty text, or None if on time."""
     ss = st.session_state
@@ -820,7 +854,7 @@ def _process_guess(word: str, clear_input: bool = False) -> None:
     ss.spin_letter = None          # any wheel demand was satisfied
     ss.spin_note = None
     if ss.get("timer_on"):         # the clock restarts with every play
-        ss.turn_deadline = time.time() + TURN_SECONDS
+        ss.turn_deadline = time.time() + _turn_seconds()
     if game.status is GameStatus.WORDLED:
         ss.message = ("loss", f"💀 You said it! “{word.upper()}” was the "
                               "hidden word." +
@@ -879,7 +913,7 @@ def _bot_reply() -> None:
         ss.message = ("ok", f"👾 played “{bot_word.upper()}”. Your turn.")
     record_result_if_final()
     if ss.get("timer_on") and not game.is_over:
-        ss.turn_deadline = time.time() + TURN_SECONDS  # your clock, not the bot's
+        ss.turn_deadline = time.time() + _turn_seconds()  # your clock, not the bot's
 
 
 @_safe
@@ -1450,6 +1484,30 @@ section[data-testid="stSidebar"] h1 {
 .dw-row.dw-bot::after {content: "👾"; position: absolute; right: -26px;
                        top: 50%; transform: translateY(-50%);
                        font-size: 0.85rem;}
+/* Definitions: hover or tap a played row to learn what its word means.
+   A faint ⓘ hints it's interactive; the card pops ABOVE the row (so it
+   never covers the next row's tap target) and is revealed purely by
+   CSS :hover / :focus — works on desktop hover and mobile tap alike. */
+.dw-def {cursor: help; outline: none;}
+.dw-def::before {content: "ⓘ"; position: absolute; left: -20px; top: 50%;
+                 transform: translateY(-50%); font-size: 0.8rem;
+                 opacity: 0.32; transition: opacity .15s ease;}
+.dw-def:hover::before, .dw-def:focus::before {opacity: 0.85;}
+.dw-defbox {position: absolute; left: 50%; bottom: 100%;
+            transform: translateX(-50%) translateY(-6px);
+            margin-bottom: 2px; max-width: 270px; width: max-content;
+            background: #1d1d1f; color: #ededed; border: 1px solid #3a3a3c;
+            border-radius: 8px; padding: 7px 10px; font-size: 0.74rem;
+            line-height: 1.35; font-weight: 400; text-align: left;
+            white-space: normal; box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+            opacity: 0; visibility: hidden; pointer-events: none;
+            transition: opacity .15s ease, transform .15s ease; z-index: 30;}
+.dw-defbox b {font-weight: 800; letter-spacing: 0.02em;}
+.dw-defbox-empty {color: #9a9a9c; font-style: italic;}
+.dw-def:hover .dw-defbox, .dw-def:focus .dw-defbox,
+.dw-def:focus-within .dw-defbox {opacity: 1; visibility: visible;
+            transform: translateX(-50%) translateY(0);}
+@media (max-width: 480px) {.dw-def::before {display: none;}}
 @keyframes dw-shake {
   20% {transform:translateX(-7px);} 40% {transform:translateX(7px);}
   60% {transform:translateX(-4px);} 80% {transform:translateX(4px);}
@@ -1594,10 +1652,49 @@ def _rail_html(r: A.MoveRating, fresh: bool) -> str:
             f'<b>{top}</b><br>{sub}</span>')
 
 
+def _def_attrs(word: str, defs: dict[str, str | None] | None
+               ) -> tuple[str, str]:
+    """Per-row definition affordance: a native hover ``title`` plus an
+    inline card revealed on tap/click (CSS ``:focus``/``:hover``).
+    Returns ``(row_attrs, defbox_html)`` for a played row. Works for the
+    player's and the bot's words alike."""
+    if defs is None or word not in defs:
+        return "", ""               # definitions disabled for this render
+    gloss = defs.get(word)
+    label = html.escape(word.upper())
+    if gloss:
+        body = f'<b>{label}</b> · {html.escape(gloss)}'
+        tip = f"{word.upper()} · {gloss}"
+        box_cls = "dw-defbox"
+    else:
+        body = f'<b>{label}</b> · no definition found'
+        tip = f"{word.upper()} · no definition found"
+        box_cls = "dw-defbox dw-defbox-empty"
+    attrs = f' tabindex="0" title="{html.escape(tip, quote=True)}"'
+    return attrs, f'<span class="{box_cls}">{body}</span>'
+
+
+def board_definitions(game: AvoidleGame) -> dict[str, str | None]:
+    """Glosses for every word currently on the board, memoised in the
+    session so a word is looked up at most once. ``None`` means 'looked
+    up, nothing found' — distinct from 'not yet looked up'."""
+    ss = st.session_state
+    cache = ss.defs
+    for turn in game.history:
+        word = turn.guess
+        if word not in cache:
+            try:
+                cache[word] = DEF.define(word, ss.lang)
+            except Exception:
+                cache[word] = None    # never let a lookup break the board
+    return cache
+
+
 def render_board(game: AvoidleGame, buffer: str = "",
                  animate_last: bool = False, shake: bool = False,
                  duel: bool = False,
-                 ratings: list[A.MoveRating] | None = None) -> str:
+                 ratings: list[A.MoveRating] | None = None,
+                 defs: dict[str, str | None] | None = None) -> str:
     rows = []
     last = len(game.history) - 1
     width = game.word_length
@@ -1617,7 +1714,11 @@ def render_board(game: AvoidleGame, buffer: str = "",
         if (not duel or i % 2 == 0) and r_idx < len(ratings):
             rail = _rail_html(ratings[r_idx],
                               fresh=animate_last and i == last)
-        rows.append(f'<div class="{cls}">{tiles}{rail}</div>')
+        # hover/tap a played row to learn what the word means
+        attrs, defbox = _def_attrs(turn.guess, defs)
+        if attrs:
+            cls += " dw-def"
+        rows.append(f'<div class="{cls}"{attrs}>{tiles}{rail}{defbox}</div>')
     # duel boards are 12 rows deep — grow as played instead of pushing
     # the keyboard below the fold with a wall of empty tiles
     empty_to_show = min(game.guesses_left, 2) if duel else game.guesses_left
@@ -1719,6 +1820,63 @@ def render_click_keyboard(game: AvoidleGame, lang: str) -> None:
             if extras:
                 cols[-1].button("⌫", key="kbd_back", on_click=act_backspace,
                                 width="stretch", disabled=game.is_over)
+
+
+def inject_keyboard_bridge(mode: str, is_over: bool) -> None:
+    """Make the player's physical keyboard work on desktop regardless of
+    the chosen input method.
+
+    * **Click mode:** a keydown listener on the parent document maps real
+      keystrokes onto the on-screen keys — a letter clicks its key, Enter
+      submits, Backspace deletes — reusing every existing button callback,
+      so the buffer, clue colors and rules behave identically to tapping.
+    * **Type mode:** the text box auto-focuses when nothing else is, so
+      you can start typing immediately (and again after each submit)
+      without clicking into it first.
+
+    The script runs in a ``components.html`` iframe, which Streamlit grants
+    same-origin access to the parent page. A single handler is kept on the
+    parent ``window`` and replaced every rerun, so listeners never stack
+    up (which would type each letter several times). Touch devices have no
+    physical keyboard, so this is a harmless no-op there."""
+    components.html(_keyboard_bridge_js(mode, is_over), height=0)
+
+
+def _keyboard_bridge_js(mode: str, is_over: bool) -> str:
+    """The injected script for :func:`inject_keyboard_bridge` (pure, so it
+    can be unit-tested without a browser)."""
+    js_mode = mode if mode in ("click", "type") else "type"
+    js_over = "true" if is_over else "false"
+    return (
+        "<script>(function(){"
+        "var pw=window.parent,pd=pw.document;"
+        "if(pw.__avoidleKey){pd.removeEventListener('keydown',"
+        "pw.__avoidleKey,true);pw.__avoidleKey=null;}"
+        f"var MODE='{js_mode}',OVER={js_over};"
+        "if(MODE==='type'){try{var inp=pd.querySelector("
+        "'.st-key-guessrow input');var ae=pd.activeElement;"
+        "if(inp&&(!ae||ae===pd.body))inp.focus();}catch(e){}return;}"
+        "if(MODE!=='click'||OVER)return;"
+        "function clickKey(label){var kbd=pd.querySelector("
+        "'.st-key-clickkbd');if(!kbd)return false;"
+        "var btns=kbd.querySelectorAll('button');"
+        "for(var i=0;i<btns.length;i++){"
+        "if(btns[i].textContent.trim().toUpperCase()===label){"
+        "if(!btns[i].disabled)btns[i].click();return true;}}return false;}"
+        "var handler=function(e){"
+        "if(e.ctrlKey||e.metaKey||e.altKey)return;"
+        "var ae=pd.activeElement,tag=ae&&ae.tagName?"
+        "ae.tagName.toLowerCase():'';"
+        "if(tag==='input'||tag==='textarea'||(ae&&ae.isContentEditable))"
+        "return;var done=false;"
+        "if(e.key==='Enter')done=clickKey('⏎');"
+        "else if(e.key==='Backspace')done=clickKey('⌫');"
+        "else if(e.key&&e.key.length===1){var ch=e.key.toUpperCase();"
+        "if(ch.toLowerCase()!==ch.toUpperCase())done=clickKey(ch);}"
+        "if(done){e.preventDefault();e.stopPropagation();}};"
+        "pw.__avoidleKey=handler;"
+        "pd.addEventListener('keydown',handler,true);"
+        "})();</script>")
 
 
 def render_streak_heatmap() -> str:
@@ -1846,6 +2004,7 @@ def main() -> None:
                         ("bot_select", ss.bot_level),
                         ("input_select", input_label),
                         ("timer_toggle", ss.timer_on),
+                        ("turn_seconds_select", _turn_seconds()),
                         ("nick_input", ss.nickname)):
         if wkey == "nick_input":
             if _slug(ss.get(wkey, "")) != truth:
@@ -1896,14 +2055,24 @@ def main() -> None:
                          help="Hard solves the endgame by backward "
                               "induction (it reasons several moves ahead); "
                               "tougher bots pay a bigger multiplier.")
-        st.toggle("⏱️ Turn timer — 3:00 per move", key="timer_toggle",
-                  on_change=act_toggle_timer,
-                  disabled=game.guesses_made > 0 and not game.is_over,
-                  help="Lock it in before your first word. Every play "
-                       "must land within 3 minutes (the clock restarts "
-                       "after each one). Run over and the clock eats a "
-                       "hint, then a peek, then an undo — with nothing "
-                       "left to take, you lose.")
+        locked = game.guesses_made > 0 and not game.is_over
+        st.toggle("⏱️ Time crunch", key="timer_toggle",
+                  on_change=act_toggle_timer, disabled=locked,
+                  help="A countdown per move (off by default). Lock it in "
+                       "before your first word. The clock restarts after "
+                       "each play; run over and it eats a hint, then a "
+                       "peek, then an undo — with nothing left to take, "
+                       "you lose.")
+        if ss.timer_toggle:
+            secs = list(TIMER_CHOICES)
+            st.selectbox("Time per move", secs,
+                         index=secs.index(_turn_seconds())
+                         if _turn_seconds() in TIMER_CHOICES else 2,
+                         key="turn_seconds_select",
+                         format_func=TIMER_CHOICES.get,
+                         on_change=act_change_turn_seconds, disabled=locked,
+                         help="How long each move may take. Pick before "
+                              "your first word — it locks once you start.")
         st.button("🔄 New game", on_click=act_new_game, width="stretch")
         # retention nudge: today's daily for this combo is still unplayed
         today_key = (f"{datetime.date.today().isoformat()}:"
@@ -2112,7 +2281,8 @@ def main() -> None:
                              animate_last=ss.last_action == "guess",
                              shake=ss.last_action == "error",
                              duel=ss.mode == "duel",
-                             ratings=ss.ratings),
+                             ratings=ss.ratings,
+                             defs=board_definitions(game)),
                 unsafe_allow_html=True)
     if ss.get("bot_pending") and ss.mode == "duel" and not game.is_over:
         # the player's row just rendered above; give the bot a visible,
@@ -2152,6 +2322,10 @@ def main() -> None:
             render_click_keyboard(game, ss.lang)
     else:
         st.markdown(render_keyboard(game, ss.lang), unsafe_allow_html=True)
+    # let a real (physical) keyboard drive the game on desktop, in EITHER
+    # input mode — typing routes to the on-screen keys in click mode, and
+    # the text box auto-focuses in typing mode so you can just start typing
+    inject_keyboard_bridge(ss.input_mode, game.is_over)
 
     show_message()
     if ss.get("spin_note") and not game.is_over:

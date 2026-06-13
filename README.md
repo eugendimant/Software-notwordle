@@ -146,6 +146,18 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.2.2** — know your words, mind the clock: **📖 row definitions**
+  — hover or tap any played row (yours *or* the duel bot's) to see a
+  one-line gloss of what that word means, pulled best-effort from
+  Wiktionary in all four languages and cached per word (offline-safe: a
+  no-network host degrades to a quiet "no definition found" and never
+  stalls play). And the timer is now a flexible **⏱️ Time crunch**: still
+  off by default and lockable before your first word, but you pick the
+  pace — **⚡30s / 🏃1m / 🚶2m / 🧘3m / 🐢5m** per move — instead of a
+  fixed three minutes. Plus a desktop comfort: your **physical keyboard
+  now works in either input mode** — in clickable mode real keystrokes
+  drive the on-screen keys (Enter submits, Backspace deletes), and in
+  typing mode the box auto-focuses so you can just start typing.
 - **1.5.2.1** — the world plays together: a **server-side database**
   (self-creating SQLite, zero setup; auto-upgrades to any external DB if
   a `DATABASE_URL` secret ever exists) now holds a **🌍 worldwide
