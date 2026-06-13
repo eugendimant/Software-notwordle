@@ -1202,6 +1202,141 @@ def test_turn_timer_forfeits_with_nothing_left_to_take():
     assert at.session_state["stats"]["impossible:en:5"]["survived"] == 0
 
 
+def _fake_wiktionary(definition="A tall lifting machine.", pos="Noun"):
+    import json
+
+    def fake_get(url):
+        return json.dumps({"en": [{
+            "partOfSpeech": pos,
+            "definitions": [{"definition": definition}]}]}).encode("utf-8")
+    return fake_get
+
+
+def _board_html(at):
+    return next(m.value for m in at.markdown
+                if 'class="dw-board' in (m.value or ""))
+
+
+def test_played_row_shows_a_word_definition(monkeypatch):
+    from avoidle import definitions as D
+    D.define.cache_clear()
+    D.reset_circuit()
+    monkeypatch.setattr(D, "_http_get", _fake_wiktionary())
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    # the gloss was looked up once and memoised in the session
+    assert at.session_state["defs"][safe] == "noun — A tall lifting machine."
+    # ...and embedded in the board for hover (title) and tap (the card)
+    board = _board_html(at)
+    assert "dw-defbox" in board and "tabindex" in board
+    assert "A tall lifting machine." in board
+    assert safe.upper() in board
+
+
+def test_render_board_definition_states():
+    import app as app_module
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    game = at.session_state["game"]
+    # a real gloss: interactive row + populated card
+    known = app_module.render_board(game, defs={safe: "noun — a thing"})
+    assert "dw-def" in known and "a thing" in known
+    assert "dw-defbox-empty" not in known
+    # looked up but nothing found: still interactive, but a muted note
+    missing = app_module.render_board(game, defs={safe: None})
+    assert "dw-defbox-empty" in missing and "no definition found" in missing
+    # definitions disabled: no affordance at all
+    off = app_module.render_board(game, defs=None)
+    assert "dw-def" not in off and "tabindex" not in off
+
+
+def test_definitions_cover_the_duel_bots_word(monkeypatch):
+    from avoidle import definitions as D
+    D.define.cache_clear()
+    D.reset_circuit()
+    monkeypatch.setattr(D, "_http_get",
+                        _fake_wiktionary("An imaginary opponent.", "Noun"))
+    at = make_app()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)                       # player plays, bot replies
+    game = at.session_state["game"]
+    if game.guesses_made >= 2:            # the bot has put up a word
+        bot_word = game.history[1].guess
+        assert bot_word in at.session_state["defs"]
+        assert bot_word.upper() in _board_html(at)
+
+
+def test_time_crunch_offers_selectable_lengths_with_sensible_default():
+    import time as _t
+    import app as app_module
+    at = make_app()
+    assert at.session_state["turn_seconds"] == app_module.TURN_SECONDS == 120
+    at.toggle(key="timer_toggle").set_value(True).run()
+    sel = at.selectbox(key="turn_seconds_select")    # appears only when on
+    assert sel is not None
+    assert list(app_module.TIMER_CHOICES) == [30, 60, 120, 180, 300]
+    sel.set_value(30).run()
+    assert at.session_state["turn_seconds"] == 30
+    # the live deadline reflects the shorter crunch, not the old 3:00
+    assert at.session_state["turn_deadline"] - _t.time() <= 31
+
+
+def test_time_crunch_length_locks_once_the_game_has_begun():
+    at = make_app()
+    at.toggle(key="timer_toggle").set_value(True).run()
+    at.selectbox(key="turn_seconds_select").set_value(60).run()
+    assert at.session_state["turn_seconds"] == 60
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    locked = at.selectbox(key="turn_seconds_select")
+    assert locked.disabled                       # cannot be changed mid-game
+    locked.set_value(300).run()
+    assert at.session_state["turn_seconds"] == 60   # change rejected
+
+
+def test_keyboard_bridge_routes_real_keys_in_click_mode():
+    import app as app_module
+    js = app_module._keyboard_bridge_js("click", is_over=False)
+    # routes physical keys onto the on-screen keyboard buttons
+    assert ".st-key-clickkbd" in js
+    assert "'Enter'" in js and "'Backspace'" in js
+    assert "addEventListener('keydown'" in js
+    # exactly one handler ever lives on the parent (no stacked listeners)
+    assert "removeEventListener('keydown'" in js
+    assert "__avoidleKey" in js
+    # never hijacks typing into a real text field
+    assert "isContentEditable" in js
+
+
+def test_keyboard_bridge_autofocuses_the_text_box_in_type_mode():
+    import app as app_module
+    js = app_module._keyboard_bridge_js("type", is_over=False)
+    assert ".st-key-guessrow input" in js and ".focus()" in js
+    # the runtime branch is selected by the mode flag baked into the script
+    assert "MODE='type'" in js
+    assert "MODE='click'" not in js
+
+
+def test_keyboard_bridge_is_inert_once_the_game_is_over():
+    import app as app_module
+    js = app_module._keyboard_bridge_js("click", is_over=True)
+    assert "OVER=true" in js
+
+
+def test_keyboard_bridge_renders_without_error():
+    # the bridge is injected on a normal click-mode board
+    at = make_click_app()
+    assert not at.exception
+    assert at.session_state["input_mode"] == "click"
+
+
 def test_roulette_wheel_spins_and_keeps_the_game_fair():
     import random as _random
     at = make_app()
