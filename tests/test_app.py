@@ -235,6 +235,26 @@ def test_clickable_keyboard_full_flow():
         assert at.button(key=f"kbd_{know_gray[0]}").disabled
 
 
+def test_clickable_keys_mirror_the_board_colors():
+    import app as app_module
+    # green and yellow are distinct types, not one shared accent
+    assert app_module._key_type("G") == "primary"
+    assert app_module._key_type("Y") == "tertiary"
+    assert app_module._key_type("-") == "secondary"
+    assert app_module._key_type(None) == "secondary"
+    at = make_click_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    game.submit("score")        # feedback -Y-YG: E green, C/R yellow, S/O gray
+    at.run()
+    assert not at.exception
+    assert at.button(key="kbd_e").proto.type == "primary"     # green key
+    assert at.button(key="kbd_c").proto.type == "tertiary"    # yellow key
+    assert at.button(key="kbd_r").proto.type == "tertiary"    # yellow key
+    assert at.button(key="kbd_s").proto.type == "secondary"   # eliminated
+    assert at.button(key="kbd_s").disabled
+
+
 def test_clickable_keyboard_rejects_and_keeps_buffer():
     at = make_click_app()
     for letter in "zzzzz":

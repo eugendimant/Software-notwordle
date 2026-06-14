@@ -28,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.8"
+_EXPECTED_CORE_VERSION = "1.5.2.9"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -1787,6 +1787,24 @@ section[data-testid="stSidebar"] h1 {
   border-radius: 6px;
   text-transform: uppercase;
 }
+/* keys mirror the board: a green clue is green, a yellow clue is yellow —
+   not both the one shared accent (the bug where a yellow-up-top letter
+   looked green on the keyboard). green=primary, yellow=tertiary. */
+.st-key-clickkbd [data-testid="stBaseButton-primary"] {
+  background: #538d4e !important; border: 1px solid #538d4e !important;
+  color: #fff !important;
+}
+.st-key-clickkbd [data-testid="stBaseButton-primary"]:hover {
+  background: #5fa258 !important; border-color: #5fa258 !important;
+}
+.st-key-clickkbd [data-testid="stBaseButton-tertiary"] {
+  background: #b59f3b !important; border: 1px solid #b59f3b !important;
+  color: #fff !important;
+}
+.st-key-clickkbd [data-testid="stBaseButton-tertiary"]:hover {
+  background: #c6ae42 !important; border-color: #c6ae42 !important;
+  color: #fff !important;
+}
 @media (max-width: 480px) {
   .st-key-clickkbd [data-testid="stColumn"] {
     flex: 0 0 7.6vw !important;
@@ -2002,10 +2020,22 @@ def render_meter(game: AvoidleGame) -> str:
             f'style="width:{pct:.1f}%;background:{color}"></div></div>')
 
 
+def _key_type(status: str | None) -> str:
+    """The clickable-key button type for a letter's best-known clue, so
+    green and yellow render as their own colors (matching the board)
+    instead of one shared accent."""
+    if status == GREEN:
+        return "primary"
+    if status == YELLOW:
+        return "tertiary"
+    return "secondary"
+
+
 def render_click_keyboard(game: AvoidleGame, lang: str) -> None:
-    """Clickable on-screen keyboard (st.buttons). Letters keep their clue
-    color knowledge: eliminated letters are disabled, known letters green.
-    Wrapped in a keyed container so CSS can pin rows horizontal on phones."""
+    """Clickable on-screen keyboard (st.buttons). Letters carry their clue
+    color — green keys green, yellow keys yellow, eliminated keys disabled
+    — so the keyboard always matches the board above it. Wrapped in a keyed
+    container so CSS can pin rows horizontal on phones."""
     know = letter_knowledge(game)
     with st.container(key="clickkbd"):
         for r, row in enumerate(W.KEYBOARDS[lang]):
@@ -2023,8 +2053,7 @@ def render_click_keyboard(game: AvoidleGame, lang: str) -> None:
                 cols[i + offset].button(
                     letter.upper(), key=f"kbd_{letter}",
                     on_click=act_key, args=(letter,),
-                    type="primary" if status in (GREEN, YELLOW)
-                    else "secondary",
+                    type=_key_type(status),
                     disabled=game.is_over or status == GRAY,
                     width="stretch")
             if extras:
