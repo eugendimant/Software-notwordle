@@ -541,6 +541,83 @@ def test_daily_streak_and_no_quest_banner():
     assert streaks["en:5"]["streak"] == 1
 
 
+# v1.5.2.7: resume an in-progress game after a phone drops its connection
+def _played_game(secret="crane", n=3):
+    import random as _random
+    from avoidle import words as W
+    from avoidle.engine import AvoidleGame, GameConfig
+    g = AvoidleGame(secret, W.allowed_guesses("en", 5), GameConfig("Classic"),
+                    rng=_random.Random(7))
+    played = []
+    for _ in range(n):
+        safe = next(w for w in g.remaining_words
+                    if w != g.secret and w not in played)
+        g.submit(safe)
+        played.append(safe)
+    return g, played
+
+
+def test_game_snapshot_round_trip_rebuilds_the_board():
+    import app as app_module
+    g, played = _played_game()
+    g.undos_used = 2
+    snap = dict(app_module._pack_game_core(g))
+    snap.update({"v": app_module._GAME_SNAPSHOT_V, "mode": "classic",
+                 "lang": "en", "len": 5})
+    g2 = app_module._game_from_snapshot(snap)
+    assert g2 is not None
+    assert [t.guess for t in g2.history] == played
+    assert [t.feedback for t in g2.history] == [t.feedback for t in g.history]
+    assert g2.remaining_words == g.remaining_words      # pools rebuilt
+    assert g2.undos_used == 2 and g2.secret == "crane" and not g2.is_over
+
+
+def test_game_snapshot_rejects_corruption():
+    import app as app_module
+    from avoidle import words as W
+    from avoidle.engine import AvoidleGame, GameConfig
+    g, _ = _played_game(n=1)
+    base = dict(app_module._pack_game_core(g))
+    base.update({"v": 1, "mode": "classic", "lang": "en", "len": 5})
+    assert app_module._game_from_snapshot(base) is not None
+    assert app_module._game_from_snapshot({**base, "v": 99}) is None
+    assert app_module._game_from_snapshot({**base, "secret": "zzzzz"}) is None
+    assert app_module._game_from_snapshot({**base, "hist": []}) is None
+    assert app_module._game_from_snapshot({"nope": 1}) is None
+    assert app_module._game_from_snapshot("not a dict") is None
+    # a board where the secret was said is a loss — never resumed
+    lost = AvoidleGame("crane", W.allowed_guesses("en", 5),
+                       GameConfig("Classic"))
+    lost.submit("crane")
+    lostsnap = dict(app_module._pack_game_core(lost))
+    lostsnap.update({"v": 1, "mode": "classic", "lang": "en", "len": 5})
+    assert app_module._game_from_snapshot(lostsnap) is None
+
+
+def test_in_progress_game_is_snapshotted_for_resume():
+    import json as _json, zlib as _zlib, base64 as _b64
+    import app as app_module
+    at = make_app()
+    game = at.session_state["game"]
+    safe = next(w for w in game.remaining_words if w != game.secret)
+    guess(at, safe)
+    token = at.session_state["_last_game_token"]
+    assert isinstance(token, str) and token            # board was persisted
+    snap = _json.loads(_zlib.decompress(_b64.urlsafe_b64decode(token)).decode())
+    g2 = app_module._game_from_snapshot(snap)
+    assert g2 is not None and [t.guess for t in g2.history] == [safe]
+
+
+def test_finished_game_clears_the_resume_snapshot():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+        guess(at, word)
+    assert at.session_state["game"].is_over
+    assert at.session_state["_last_game_token"] is None   # cookie cleared
+
+
 def test_backup_roundtrip_with_progress_fields():
     import app as app_module
     payload = app_module.parse_stats_json(

@@ -28,7 +28,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.2.6"
+_EXPECTED_CORE_VERSION = "1.5.2.7"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -54,6 +54,8 @@ from avoidle.engine import (
     GameConfig,
     GameStatus,
     InvalidGuess,
+    TurnRecord,
+    is_consistent,
 )
 
 # ----------------------------------------------------------------------
@@ -242,6 +244,10 @@ def init_state() -> None:
         ss._cookie_checked = True
         if not ss.stats and ss.xp == 0:   # only a truly fresh session
             restore_progress_from_cookie()
+        if "game" not in ss:
+            # a dropped phone connection reloads the page: resume the
+            # in-progress board instead of starting over
+            restore_game_from_cookie()
     if "game" not in ss:
         ss.game = _new_game(ss.mode)
 
@@ -1130,6 +1136,182 @@ def apply_progress(payload: dict, merge_counter: bool = False) -> None:
     ss.wins_langs, ss.wins_lengths = derive_session_wins(payload["stats"])
 
 
+def _pack_game_core(game: AvoidleGame) -> dict:
+    """The board-only part of a resume snapshot (pure, no session)."""
+    c = game.config
+    return {
+        "secret": game.secret,
+        "cfg": [c.label, c.max_guesses, c.max_undos, c.max_hints,
+                c.max_peeks, c.score_multiplier],
+        "hist": [[t.guess, t.feedback] for t in game.history],
+        "used": [game.undos_used, game.hints_used, game.peeks_used],
+        "minpool": game.min_pool_seen,
+        "trap": game.was_ever_trapped,
+    }
+
+
+def _game_from_snapshot(snap: dict) -> AvoidleGame | None:
+    """Rebuild an in-progress :class:`AvoidleGame` from a snapshot, or
+    return None if anything is missing/inconsistent. Feedback is stored
+    (not recomputed), so a Roulette secret-reroll replays correctly.
+    Conservative by design — a corrupt cookie yields a fresh game."""
+    try:
+        if not isinstance(snap, dict) or snap.get("v") != _GAME_SNAPSHOT_V:
+            return None
+        lang, length = snap["lang"], int(snap["len"])
+        if (snap.get("mode") not in MODES.values()
+                or lang not in W.LANGUAGES or length not in W.WORD_LENGTHS):
+            return None
+        dictionary = W.allowed_guesses(lang, length)
+        secret = str(snap["secret"]).lower()
+        if secret not in dictionary or len(secret) != length:
+            return None
+        cfg = snap["cfg"]
+        config = GameConfig(label=str(cfg[0]), max_guesses=int(cfg[1]),
+                            max_undos=int(cfg[2]), max_hints=int(cfg[3]),
+                            max_peeks=int(cfg[4]),
+                            score_multiplier=float(cfg[5]))
+        game = AvoidleGame(secret, dictionary, config, rng=random.Random())
+        valid_fb = set(GREEN + YELLOW + GRAY)
+        for pair in snap["hist"]:
+            guess, fb = str(pair[0]).lower(), str(pair[1])
+            if (len(guess) != length or guess not in dictionary
+                    or len(fb) != length
+                    or any(ch not in valid_fb for ch in fb)):
+                return None
+            game.history.append(TurnRecord(guess, fb))
+            game._pools.append([w for w in game._pools[-1]
+                                if is_consistent(w, guess, fb)])
+        if not (0 < len(game.history) <= config.max_guesses):
+            return None                       # nothing to resume / overfull
+        if secret not in game.remaining_words:
+            return None                       # broken board (invariant lost)
+        if any(t.guess == secret for t in game.history):
+            return None                       # a lost board — don't resume it
+        u = snap["used"]
+        game.undos_used, game.hints_used, game.peeks_used = (
+            _num(u[0]), _num(u[1]), _num(u[2]))
+        game.min_pool_seen = _num(snap.get("minpool", game.remaining_count))
+        game._trap_faced = bool(snap.get("trap"))
+        game.status = GameStatus.PLAYING
+        return game
+    except Exception:
+        return None
+
+
+def _restore_ratings(rows) -> list:
+    """Rebuild the per-row verdict ratings, stopping at the first bad row
+    so the list stays aligned with the board."""
+    out = []
+    for r in rows or []:
+        try:
+            out.append(A.MoveRating(
+                word=str(r[0]), retained=_num(r[1]), pool_size=_num(r[2]),
+                percentile=float(r[3]), best_word=str(r[4]),
+                best_retained=_num(r[5]), exact=bool(r[6]),
+                fatal=bool(r[7]), forced=bool(r[8])))
+        except Exception:
+            break
+    return out
+
+
+def encode_game() -> str | None:
+    """The in-progress game as a cookie-safe token, so a phone that drops
+    its connection and reloads can resume instead of resetting. Returns
+    None when there's nothing resumable (no game yet, or it's finished)."""
+    ss = st.session_state
+    game = ss.get("game")
+    if not isinstance(game, AvoidleGame) or game.is_over:
+        return None
+    snap = _pack_game_core(game)
+    snap.update({
+        "v": _GAME_SNAPSHOT_V, "mode": ss.mode, "lang": ss.lang,
+        "len": game.word_length,
+        "ratings": [[r.word, r.retained, r.pool_size, r.percentile,
+                     r.best_word, r.best_retained, r.exact, r.fatal,
+                     r.forced] for r in ss.get("ratings", [])],
+        "surv": [ss.get("survival_round", 1), ss.get("survival_total", 0)],
+        "bot": ss.get("bot_level", "normal"),
+        "pending": bool(ss.get("bot_pending")),
+        "spin": [ss.get("spin_pot", 0), ss.get("spin_letter"),
+                 ss.get("last_spin")],
+        "spin_note": ss.get("spin_note"),
+        "timer": bool(ss.get("timer_on")),
+        "daily_key": ss.get("daily_key"),
+    })
+    raw = json.dumps(snap, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(zlib.compress(raw, 9)).decode()
+
+
+def restore_game_from_cookie() -> bool:
+    """On a fresh session, resume the in-progress game from its cookie.
+    Exception-safe: any problem falls through to a new game."""
+    try:
+        token = st.context.cookies.get(GAME_COOKIE)
+    except Exception:
+        return False
+    if not token:
+        return False
+    try:
+        data = base64.urlsafe_b64decode(token.encode())
+        d = zlib.decompressobj()
+        raw = d.decompress(data, 1 << 20)
+        if d.unconsumed_tail:
+            return False
+        snap = json.loads(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return False
+    game = _game_from_snapshot(snap)
+    if game is None:
+        return False
+    ss = st.session_state
+    ss.mode, ss.lang, ss.word_len = snap["mode"], snap["lang"], game.word_length
+    ss.game = game
+    bot = snap.get("bot")
+    if bot in BOT.BOT_LEVELS:
+        ss.bot_level = bot
+    surv = snap.get("surv") or [1, 0]
+    ss.survival_round = _num(surv[0]) or 1
+    ss.survival_total = _num(surv[1])
+    ss.bot_pending = bool(snap.get("pending")) and ss.mode == "duel"
+    spin = snap.get("spin") or [0, None, None]
+    ss.spin_pot = _num(spin[0])
+    ss.spin_letter = spin[1] if isinstance(spin[1], str) else None
+    ss.last_spin = spin[2] if isinstance(spin[2], str) else None
+    ss.spin_note = snap.get("spin_note") if isinstance(
+        snap.get("spin_note"), str) else None
+    ss.spin_undo_stack = []
+    ss.timer_on = bool(snap.get("timer"))
+    ss.turn_deadline = (time.time() + _turn_seconds()) if ss.timer_on else None
+    ss.daily_key = snap.get("daily_key") if isinstance(
+        snap.get("daily_key"), str) else None
+    ss.ratings = _restore_ratings(snap.get("ratings"))
+    ss.review = None
+    ss.last_action = None
+    return True
+
+
+def flush_game_cookie() -> None:
+    """Persist (or clear) the resume cookie whenever the board changes."""
+    ss = st.session_state
+    token = encode_game()
+    if token == ss.get("_last_game_token"):
+        return                       # unchanged since the last write
+    ss._last_game_token = token
+    if token is None:
+        js = (f"document.cookie = '{GAME_COOKIE}=; max-age=0; "
+              "path=/; SameSite=Lax';")
+    elif len(token) <= 3800:
+        js = (f"document.cookie = '{GAME_COOKIE}={token}; "
+              "max-age=604800; path=/; SameSite=Lax';")   # resume for a week
+    else:
+        return                       # oversized snapshot (very long game)
+    try:
+        components.html(f"<script>{js}</script>", height=0)
+    except Exception:
+        pass
+
+
 def reset_progress_state() -> None:
     """A brand-new save slot: all progress fields back to zero."""
     ss = st.session_state
@@ -1226,6 +1408,8 @@ def restore_progress_from_cookie() -> bool:
 
 PROGRESS_COOKIE = "dw_progress"
 NICK_COOKIE = "dw_nick"
+GAME_COOKIE = "dw_game"
+_GAME_SNAPSHOT_V = 1
 
 NUM_CAP = 10**9  # ceiling for every numeric backup field
 
@@ -2556,6 +2740,10 @@ def main() -> None:
             except Exception:
                 pass
         ss.progress_dirty = False
+
+    # keep the resume cookie in step with the board, so a backgrounded
+    # phone can reload and pick up exactly where it left off
+    flush_game_cookie()
 
     # animations are one-shot: replay only after the next qualifying action
     ss.last_action = None
