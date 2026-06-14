@@ -47,6 +47,17 @@ def test_clean_strips_markup_and_clamps_length():
     assert len(out) <= D._MAX_LEN and out.endswith("…")
 
 
+def test_clean_drops_inlined_templatestyles_css():
+    # Wiktionary inlines a <style> block (e.g. from {{defdate}}); its CSS
+    # must never bleed into the gloss (the "OVATE …{font-size:smaller}" bug)
+    wrapped = ('Shaped like an egg<style data-mw-deduplicate="TS:r1">'
+               '.mw-parser-output .defdate{font-size:smaller}</style>')
+    assert D._clean(wrapped) == "Shaped like an egg"
+    # even if the tags were stripped upstream, the bare rule still goes
+    bare = "Shaped like an egg .mw-parser-output .defdate{font-size:smaller}"
+    assert D._clean(bare) == "Shaped like an egg"
+
+
 def test_parse_prefers_the_played_language_and_prepends_pos():
     out = D._parse(_rest_payload("de", "Substantiv", "Ein Apfel."), "de")
     assert out == "(substantiv) Ein Apfel."

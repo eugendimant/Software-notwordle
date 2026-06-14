@@ -46,6 +46,11 @@ _MAX_LEN = 180            # trim long entries to a single readable line
 
 _TAG = re.compile(r"<[^>]+>")          # strip inline HTML
 _WS = re.compile(r"\s+")
+# Wiktionary inlines TemplateStyles, e.g. a {{defdate}} drags in a
+# <style>…</style> block; stripping tags alone would leave its CSS text
+# ("…​.mw-parser-output .defdate{font-size:smaller}") in the gloss.
+_STYLE = re.compile(r"<(style|script)\b[^>]*>.*?</\1>", re.S | re.I)
+_CSS_RULE = re.compile(r"[.#][^{}<>]*\{[^{}]*\}")   # any leftover CSS rule
 
 # Only *network* failures (no HTTP response at all) count toward the
 # breaker; after a few in a row we stop trying for the process so an
@@ -74,7 +79,10 @@ def _http_get(url: str) -> bytes:
 
 def _clean(text: str) -> str:
     """Strip markup/whitespace and clamp to one readable line."""
-    text = _WS.sub(" ", _TAG.sub("", text or "")).strip()
+    text = _STYLE.sub("", text or "")     # drop <style>/<script> + contents
+    text = _TAG.sub("", text)             # then the remaining tags
+    text = _CSS_RULE.sub("", text)        # and any CSS rule that slipped past
+    text = _WS.sub(" ", text).strip()
     if len(text) > _MAX_LEN:
         text = text[:_MAX_LEN - 1].rstrip(" ,;:.") + "…"
     return text
