@@ -237,6 +237,43 @@ def _via_wikitext(title: str, lang: str) -> str | None:
     return _first_definition(wikitext)
 
 
+# ----------------------------------------------------------------------
+# Tier 3: the English Wiktionary as a last resort (an English gloss, but
+# its definition endpoint is the well-supported one and covers a huge set
+# of words and inflected forms across every language)
+# ----------------------------------------------------------------------
+_LANG_NAMES = {"en": "English", "de": "German", "es": "Spanish",
+               "ru": "Russian"}
+
+
+def _via_english_rest(title: str, lang: str) -> str | None:
+    """The target-language entry from the *English* Wiktionary's
+    definition endpoint. English Wiktionary lists every language's words
+    (each section tagged with its ``language`` name), so this resolves a
+    German/Spanish/Russian word — including inflected forms — even when
+    that word's own Wiktionary couldn't be parsed."""
+    name = _LANG_NAMES.get(lang)
+    url = ("https://en.wiktionary.org/api/rest_v1/page/definition/"
+           + urllib.parse.quote(title))
+    data = json.loads(_http_get(url).decode("utf-8"))
+    if not isinstance(data, dict):
+        return None
+    for key, sections in data.items():
+        if not isinstance(sections, list):
+            continue
+        for section in sections:
+            if not isinstance(section, dict):
+                continue
+            if name and section.get("language") != name and key != lang:
+                continue                   # only the language being played
+            pos = _clean(str(section.get("partOfSpeech", ""))).lower()
+            for entry in section.get("definitions", []) or []:
+                gloss = _clean(str((entry or {}).get("definition", "")))
+                if gloss:
+                    return f"({pos}) {gloss}" if pos else gloss
+    return None
+
+
 def _note_network_failure() -> None:
     global _consecutive_fails, _circuit_open
     _consecutive_fails += 1
@@ -244,13 +281,30 @@ def _note_network_failure() -> None:
         _circuit_open = True               # give up on a no-egress host
 
 
+def _attempt(fetch, title: str, lang: str) -> tuple[bool, str | None]:
+    """Run one fetch tier. Returns ``(stop, gloss)``: ``stop`` is True only
+    on a genuine network failure (caller should give up); an HTTP error or
+    empty result is just ``(False, None)`` — move on to the next tier."""
+    global _consecutive_fails
+    try:
+        gloss = fetch(title, lang)
+    except urllib.error.HTTPError:
+        _consecutive_fails = 0             # reachable, just no page/endpoint
+        return False, None
+    except Exception:
+        _note_network_failure()            # genuinely offline
+        return True, None
+    _consecutive_fails = 0                  # an HTTP response = we're online
+    return False, gloss
+
+
 @lru_cache(maxsize=4096)
 def define(word: str, lang: str) -> str | None:
     """A one-line definition for ``word`` in ``lang``, or ``None``.
 
-    Always glossed in ``lang`` (it queries that language's Wiktionary).
-    Cached for the process; safe to call on every rerun."""
-    global _consecutive_fails
+    Prefers a gloss in ``lang`` (the word's own Wiktionary); only if that
+    yields nothing does it fall back to an English gloss from the English
+    Wiktionary. Cached for the process; safe to call on every rerun."""
     word = (word or "").strip().lower()
     if not word or not word.isalpha() or _circuit_open:
         return None
@@ -260,17 +314,18 @@ def define(word: str, lang: str) -> str | None:
     capitalised = word[:1].upper() + word[1:]
     if capitalised != word:
         titles.append(capitalised)
-    for title in titles:
-        for fetch in (_via_rest, _via_wikitext):
-            try:
-                gloss = fetch(title, lang)
-            except urllib.error.HTTPError:
-                _consecutive_fails = 0     # reachable, just no page/endpoint
-                continue
-            except Exception:
-                _note_network_failure()    # genuinely offline: stop here
-                return None
-            _consecutive_fails = 0         # an HTTP response = we're online
-            if gloss:
-                return gloss
+    # phase 1: the word's own Wiktionary (native-language gloss, preferred);
+    # phase 2: the English Wiktionary (English gloss) — only as a last
+    # resort, and skipped when already playing in English
+    phases = [(_via_rest, _via_wikitext)]
+    if lang != "en":
+        phases.append((_via_english_rest,))
+    for fetchers in phases:
+        for title in titles:
+            for fetch in fetchers:
+                stop, gloss = _attempt(fetch, title, lang)
+                if stop:
+                    return None
+                if gloss:
+                    return gloss
     return None

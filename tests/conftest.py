@@ -1,5 +1,6 @@
 """Shared test setup: point the server-side store at a throwaway
-database so tests never touch (or depend on) the real data/avoidle.db."""
+database so tests never touch (or depend on) the real data/avoidle.db,
+and keep word-definition lookups off the real network."""
 
 import os
 import tempfile
@@ -7,3 +8,17 @@ import tempfile
 os.environ.setdefault(
     "AVOIDLE_DB_PATH",
     os.path.join(tempfile.mkdtemp(prefix="avoidle-test-"), "store.db"))
+
+# Definition lookups must never reach the real Wiktionary during tests —
+# that would make the whole suite slow and flaky (every rendered board
+# triggers a lookup). Tests that exercise definitions monkeypatch
+# ``_http_get`` themselves; this offline stub is the safe default for
+# everyone else, so ``define()`` returns None instantly with no I/O.
+import avoidle.definitions as _definitions  # noqa: E402
+
+
+def _offline(url):
+    raise OSError("network disabled in tests")
+
+
+_definitions._http_get = _offline

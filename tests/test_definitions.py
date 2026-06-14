@@ -233,7 +233,7 @@ def test_define_tries_the_capitalised_title_for_german_nouns(monkeypatch):
     assert D.define("apfel", "de") == "runde Frucht des Apfelbaums"
 
 
-def test_define_queries_the_players_language_wiktionary(monkeypatch):
+def test_define_queries_the_native_wiktionary_first_then_english(monkeypatch):
     hosts = []
 
     def fake_get(url):
@@ -242,7 +242,55 @@ def test_define_queries_the_players_language_wiktionary(monkeypatch):
 
     monkeypatch.setattr(D, "_http_get", fake_get)
     D.define("perro", "es")
-    assert hosts and all("es.wiktionary.org" in u for u in hosts)
+    # the word's own Wiktionary is exhausted before the English fallback
+    assert "es.wiktionary.org" in hosts[0]
+    first_en = next(i for i, u in enumerate(hosts) if "en.wiktionary.org" in u)
+    assert all("es.wiktionary.org" in u for u in hosts[:first_en])
+
+
+def test_via_english_rest_picks_the_played_language_section(monkeypatch):
+    blob = json.dumps({"other": [
+        {"language": "Italian", "partOfSpeech": "Noun",
+         "definitions": [{"definition": "wrong language"}]},
+        {"language": "Spanish", "partOfSpeech": "Noun",
+         "definitions": [{"definition": "dog"}]},
+    ]}).encode()
+    monkeypatch.setattr(D, "_http_get", lambda url: blob)
+    assert D._via_english_rest("perro", "es") == "(noun) dog"
+
+
+def test_via_english_rest_ignores_other_languages(monkeypatch):
+    only_de = json.dumps({"other": [{"language": "German",
+        "partOfSpeech": "Noun",
+        "definitions": [{"definition": "Hund"}]}]}).encode()
+    monkeypatch.setattr(D, "_http_get", lambda url: only_de)
+    assert D._via_english_rest("perro", "es") is None   # never wrong-language
+
+
+def test_define_falls_back_to_english_when_native_is_empty(monkeypatch):
+    def fake_get(url):
+        if "en.wiktionary.org" in url:
+            return json.dumps({"other": [{"language": "German",
+                "partOfSpeech": "Noun",
+                "definitions": [{"definition": "plural of Faden"}]}]}).encode()
+        raise _http_error(404)               # native de wiki: nothing
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("fäden", "de") == "(noun) plural of Faden"
+
+
+def test_define_prefers_a_native_gloss_over_english(monkeypatch):
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        if "api.php" in url:                 # native de wikitext succeeds
+            return _wikitext_payload(":[1] runde [[Frucht]]\n")
+        raise _http_error(404)
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("apfel", "de") == "runde Frucht"
+    assert not any("en.wiktionary.org" in u for u in seen)   # never reached
 
 
 def test_define_rejects_non_words_without_network(monkeypatch):
