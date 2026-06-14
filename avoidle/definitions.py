@@ -156,6 +156,42 @@ _DEF_LINE = (
     re.compile(r"^;\s*\d+[a-z]?[^:]*:\s*(.+)$"),         # es: ";1: def"
 )
 
+# a bullet line, optionally sense-numbered: German inflected forms list
+# their grammar this way ("*Nominativ Plural des Substantivs [[Faden]]")
+_BULLET = re.compile(r"^\*+\s*(?:\[[^\]]*\d[^\]]*\]\s*)?(.+)$")
+
+# templates that mark an inflected / form-of entry, across editions
+_FORMOF_KEYS = ("of", "form", "verweis", "grundform", "flex", "plural",
+                "singular", "inflect", "particip", "konjug", "deklin",
+                "nominativ", "genitiv", "dativ", "akkusativ", "forma")
+
+
+def _form_of_gloss(line: str) -> str | None:
+    """Render an inflection/form-of template into a short gloss, e.g.
+    ``{{plural of|de|Faden}}`` -> "plural of Faden", or a bare base-form
+    pointer (German ``{{Grundformverweis Dekl|Faden}}``) -> "→ Faden"."""
+    m = re.search(r"\{\{\s*([^{}|]+?)\s*((?:\|[^{}]*)*)\}\}", line)
+    if not m:
+        return None
+    name = m.group(1).strip()
+    low = name.lower()
+    if not any(k in low for k in _FORMOF_KEYS):
+        return None
+    pos = [p.strip() for p in m.group(2).split("|")[1:]
+           if p.strip() and "=" not in p]      # positional params only
+    if pos and re.fullmatch(r"[a-z]{2,3}", pos[0]):
+        pos = pos[1:]                           # drop a leading language code
+    # the lemma is the first positional that's an actual word
+    lemma = next((p for p in pos if re.search(r"[^\W\d_]", p)), None)
+    if not lemma:
+        return None
+    lemma = _strip_wikitext(lemma)
+    if not lemma:
+        return None
+    if low.endswith(" of") or low == "of":
+        return _clean(f"{name} {lemma}")
+    return _clean(f"→ {lemma}")
+
 
 def _first_definition(wikitext: str) -> str | None:
     """The first real definition line, in the page's own language.
@@ -164,9 +200,11 @@ def _first_definition(wikitext: str) -> str | None:
     first definition line is the gloss in that language. Examples
     (``#:``), quotations (``#*``), pronunciation/etymology lines, and
     lines that reduce to nothing (a bare form-of template) are all passed
-    over for the next candidate."""
-    for raw in wikitext.splitlines():
-        line = raw.strip()
+    over. Inflected forms (e.g. a plural) carry no numbered definition, so
+    a second pass falls back to their grammatical description or the base
+    word they point to."""
+    lines = [raw.strip() for raw in wikitext.splitlines()]
+    for line in lines:                      # pass 1: a numbered definition
         for pattern in _DEF_LINE:
             m = pattern.match(line)
             if not m:
@@ -175,6 +213,15 @@ def _first_definition(wikitext: str) -> str | None:
             if gloss and re.search(r"\w", gloss):
                 return gloss
             break          # matched a def marker but empty — next line
+    for line in lines:                      # pass 2: an inflected form
+        m = _BULLET.match(line)
+        if m:
+            gloss = _strip_wikitext(m.group(1))
+            if gloss and re.search(r"\w", gloss):
+                return gloss
+        form = _form_of_gloss(line)
+        if form:
+            return form
     return None
 
 

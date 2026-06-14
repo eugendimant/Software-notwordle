@@ -143,6 +143,49 @@ def test_first_definition_returns_none_without_any_definition():
     assert D._first_definition("== Heading ==\nsome prose\n") is None
 
 
+def test_first_definition_handles_german_inflected_form():
+    # an inflected form (plural) carries no [1] definition — fall back to
+    # the grammatical description under {{Grammatische Merkmale}}
+    wt = ("== Fäden ({{Sprache|Deutsch}}) ==\n"
+          "=== {{Wortart|Deklinierte Form|Deutsch}} ===\n"
+          "{{Worttrennung}}\n:Fä·den\n"
+          "{{Aussprache}}\n:{{IPA}} {{Lautschrift|ˈfɛːdn̩}}\n"
+          "{{Grammatische Merkmale}}\n"
+          "*Nominativ Plural des Substantivs '''[[Faden]]'''\n"
+          "*Genitiv Plural des Substantivs '''[[Faden]]'''\n"
+          "{{Grundformverweis Dekl|Faden}}\n")
+    assert D._first_definition(wt) == "Nominativ Plural des Substantivs Faden"
+
+
+def test_first_definition_falls_back_to_base_form_pointer():
+    # a conjugated form with only a base-form template still points home
+    wt = ("=== {{Wortart|Konjugierte Form|Deutsch}} ===\n"
+          "{{Grundformverweis Konj|weggehen}}\n")
+    assert D._first_definition(wt) == "→ weggehen"
+
+
+def test_first_definition_renders_a_form_of_template():
+    # "# {{plural of|...}}" reduces to nothing in pass 1, but pass 2 reads
+    # the template and renders a readable gloss
+    assert D._first_definition("# {{plural of|es|perro}}\n") == \
+        "plural of perro"
+
+
+def test_form_of_gloss_renders_or_ignores():
+    assert D._form_of_gloss("# {{plural of|en|cat}}") == "plural of cat"
+    assert D._form_of_gloss("{{Grundformverweis Dekl|Faden}}") == "→ Faden"
+    assert D._form_of_gloss("a [[bird]] {{lb|en|zoology}}") is None  # not form-of
+
+
+def test_numbered_definition_still_wins_over_form_fallback():
+    # a normal entry with both a definition and a form template: the
+    # definition (pass 1) must win, never the form fallback (pass 2)
+    wt = ("# a small domesticated [[feline]]\n"
+          "# {{plural of|en|cats}}\n"
+          "*see also something\n")
+    assert D._first_definition(wt) == "a small domesticated feline"
+
+
 # ---------------------------------------------------------------------------
 # define(): tiers, multilingual fallback, capitalisation, breaker
 # ---------------------------------------------------------------------------
