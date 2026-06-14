@@ -143,6 +143,49 @@ def test_first_definition_returns_none_without_any_definition():
     assert D._first_definition("== Heading ==\nsome prose\n") is None
 
 
+def test_first_definition_handles_german_inflected_form():
+    # an inflected form (plural) carries no [1] definition — fall back to
+    # the grammatical description under {{Grammatische Merkmale}}
+    wt = ("== Fäden ({{Sprache|Deutsch}}) ==\n"
+          "=== {{Wortart|Deklinierte Form|Deutsch}} ===\n"
+          "{{Worttrennung}}\n:Fä·den\n"
+          "{{Aussprache}}\n:{{IPA}} {{Lautschrift|ˈfɛːdn̩}}\n"
+          "{{Grammatische Merkmale}}\n"
+          "*Nominativ Plural des Substantivs '''[[Faden]]'''\n"
+          "*Genitiv Plural des Substantivs '''[[Faden]]'''\n"
+          "{{Grundformverweis Dekl|Faden}}\n")
+    assert D._first_definition(wt) == "Nominativ Plural des Substantivs Faden"
+
+
+def test_first_definition_falls_back_to_base_form_pointer():
+    # a conjugated form with only a base-form template still points home
+    wt = ("=== {{Wortart|Konjugierte Form|Deutsch}} ===\n"
+          "{{Grundformverweis Konj|weggehen}}\n")
+    assert D._first_definition(wt) == "→ weggehen"
+
+
+def test_first_definition_renders_a_form_of_template():
+    # "# {{plural of|...}}" reduces to nothing in pass 1, but pass 2 reads
+    # the template and renders a readable gloss
+    assert D._first_definition("# {{plural of|es|perro}}\n") == \
+        "plural of perro"
+
+
+def test_form_of_gloss_renders_or_ignores():
+    assert D._form_of_gloss("# {{plural of|en|cat}}") == "plural of cat"
+    assert D._form_of_gloss("{{Grundformverweis Dekl|Faden}}") == "→ Faden"
+    assert D._form_of_gloss("a [[bird]] {{lb|en|zoology}}") is None  # not form-of
+
+
+def test_numbered_definition_still_wins_over_form_fallback():
+    # a normal entry with both a definition and a form template: the
+    # definition (pass 1) must win, never the form fallback (pass 2)
+    wt = ("# a small domesticated [[feline]]\n"
+          "# {{plural of|en|cats}}\n"
+          "*see also something\n")
+    assert D._first_definition(wt) == "a small domesticated feline"
+
+
 # ---------------------------------------------------------------------------
 # define(): tiers, multilingual fallback, capitalisation, breaker
 # ---------------------------------------------------------------------------
@@ -190,7 +233,7 @@ def test_define_tries_the_capitalised_title_for_german_nouns(monkeypatch):
     assert D.define("apfel", "de") == "runde Frucht des Apfelbaums"
 
 
-def test_define_queries_the_players_language_wiktionary(monkeypatch):
+def test_define_queries_the_native_wiktionary_first_then_english(monkeypatch):
     hosts = []
 
     def fake_get(url):
@@ -199,7 +242,55 @@ def test_define_queries_the_players_language_wiktionary(monkeypatch):
 
     monkeypatch.setattr(D, "_http_get", fake_get)
     D.define("perro", "es")
-    assert hosts and all("es.wiktionary.org" in u for u in hosts)
+    # the word's own Wiktionary is exhausted before the English fallback
+    assert "es.wiktionary.org" in hosts[0]
+    first_en = next(i for i, u in enumerate(hosts) if "en.wiktionary.org" in u)
+    assert all("es.wiktionary.org" in u for u in hosts[:first_en])
+
+
+def test_via_english_rest_picks_the_played_language_section(monkeypatch):
+    blob = json.dumps({"other": [
+        {"language": "Italian", "partOfSpeech": "Noun",
+         "definitions": [{"definition": "wrong language"}]},
+        {"language": "Spanish", "partOfSpeech": "Noun",
+         "definitions": [{"definition": "dog"}]},
+    ]}).encode()
+    monkeypatch.setattr(D, "_http_get", lambda url: blob)
+    assert D._via_english_rest("perro", "es") == "(noun) dog"
+
+
+def test_via_english_rest_ignores_other_languages(monkeypatch):
+    only_de = json.dumps({"other": [{"language": "German",
+        "partOfSpeech": "Noun",
+        "definitions": [{"definition": "Hund"}]}]}).encode()
+    monkeypatch.setattr(D, "_http_get", lambda url: only_de)
+    assert D._via_english_rest("perro", "es") is None   # never wrong-language
+
+
+def test_define_falls_back_to_english_when_native_is_empty(monkeypatch):
+    def fake_get(url):
+        if "en.wiktionary.org" in url:
+            return json.dumps({"other": [{"language": "German",
+                "partOfSpeech": "Noun",
+                "definitions": [{"definition": "plural of Faden"}]}]}).encode()
+        raise _http_error(404)               # native de wiki: nothing
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("fäden", "de") == "(noun) plural of Faden"
+
+
+def test_define_prefers_a_native_gloss_over_english(monkeypatch):
+    seen = []
+
+    def fake_get(url):
+        seen.append(url)
+        if "api.php" in url:                 # native de wikitext succeeds
+            return _wikitext_payload(":[1] runde [[Frucht]]\n")
+        raise _http_error(404)
+
+    monkeypatch.setattr(D, "_http_get", fake_get)
+    assert D.define("apfel", "de") == "runde Frucht"
+    assert not any("en.wiktionary.org" in u for u in seen)   # never reached
 
 
 def test_define_rejects_non_words_without_network(monkeypatch):
