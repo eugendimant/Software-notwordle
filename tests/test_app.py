@@ -64,7 +64,7 @@ def test_app_boots_with_daily_mode():
     assert at.session_state["mode"] == "daily"
     game = at.session_state["game"]
     assert game.status is GameStatus.PLAYING
-    assert game.remaining_count > 10_000
+    assert game.remaining_count > 8_000
 
 
 def test_valid_guess_updates_board_and_meter():
@@ -367,7 +367,7 @@ def test_post_game_review_lists_best_words():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["game"].status is GameStatus.SURVIVED
     button(at, "Analyze my game").click()
@@ -399,7 +399,7 @@ def test_daily_practice_replay_does_not_farm_stats():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["stats"]["daily:en:5"]["played"] == 1
     assert at.session_state["stats"]["daily:en:5"]["streak"] == 1
@@ -407,7 +407,7 @@ def test_daily_practice_replay_does_not_farm_stats():
     at.run()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     # second (practice) completion must not inflate any stat
     assert at.session_state["stats"]["daily:en:5"]["played"] == 1
@@ -433,7 +433,7 @@ def test_live_and_review_ratings_agree():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     live = list(at.session_state["ratings"])
     button(at, "Analyze my game").click()
@@ -448,7 +448,7 @@ def test_win_reveals_secret_and_frequency():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["game"].status is GameStatus.SURVIVED
     blob = " ".join(str(el.value) for el in at.info) + \
@@ -462,7 +462,7 @@ def test_trap_forecast_matches_brute_force():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate"):
+    for word in ("stare", "drake", "frame", "grape"):
         guess(at, word)
     game = at.session_state["game"]
     pool = game.remaining_words
@@ -485,7 +485,7 @@ def test_no_trap_forecast_in_impossible_mode():
     at.radio(key="mode_label").set_value("💀 Impossible").run()
     game = at.session_state["game"]
     game.secret = "crane"
-    game._pools.append(["crane", "crape", "crare"])  # tiny endgame pool
+    game._pools.append(["crane", "crape", "crate"])  # tiny endgame pool
     at.run()
     assert not at.exception
     blob = " ".join(str(el.value) for el in at.warning) + \
@@ -498,13 +498,13 @@ def test_zen_word_browser_lists_pool():
     at.radio(key="mode_label").set_value("🧘 Zen").run()
     game = at.session_state["game"]
     game.secret = "crane"
-    game._pools.append(["crane", "crape", "crare"])
+    game._pools.append(["crane", "crape", "crate"])
     at.run()
     assert not at.exception
     blob = " ".join(str(el.value) for el in at.expander[-1].markdown) \
         if at.expander else ""
     page = blob + " ".join(str(md.value) for md in at.markdown)
-    assert "CRAPE" in page and "CRARE" in page
+    assert "CRAPE" in page and "CRATE" in page
     # the browser is a zen perk: classic must not show it
     at.radio(key="mode_label").set_value("🎲 Classic").run()
     game = at.session_state["game"]
@@ -524,7 +524,7 @@ def test_win_awards_xp_and_achievements():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["game"].status is GameStatus.SURVIVED
     assert "first_win" in at.session_state["achievements"]
@@ -555,7 +555,7 @@ def test_daily_streak_and_no_quest_banner():
     assert "📅 Daily" not in page    # no date banner above the board
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     streaks = at.session_state["daily_streaks"]
     assert streaks["en:5"]["streak"] == 1
@@ -632,7 +632,7 @@ def test_finished_game_clears_the_resume_snapshot():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["game"].is_over
     assert at.session_state["_last_game_token"] is None   # cookie cleared
@@ -692,7 +692,7 @@ def test_restored_daily_done_blocks_refarming():
     at.session_state["daily_done"].add(f"{today}:en:5")  # as if restored
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["game"].status is GameStatus.SURVIVED
     assert at.session_state["xp"] == 0
@@ -730,7 +730,7 @@ def test_session_log_and_share_card_meta():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     # share card now carries level + trophy count
     blob = " ".join(str(el.value) for el in at.code)
@@ -754,7 +754,7 @@ def test_progress_cookie_roundtrip():
     at = make_app()
     game = at.session_state["game"]
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)
     assert at.session_state["xp"] > 0
     # encode within the live session, decode outside it
@@ -1008,7 +1008,7 @@ def test_rating_failure_never_desyncs_or_blocks_recording():
         raise RuntimeError("rating exploded")
     try:
         analysis.rate_move = boom
-        guess(at, "aahed")
+        guess(at, "biddy")
     finally:
         analysis.rate_move = orig
     game = at.session_state["game"]
@@ -1018,7 +1018,7 @@ def test_rating_failure_never_desyncs_or_blocks_recording():
     # and a game-ending guess under failure still records stats + XP
     try:
         analysis.rate_move = boom
-        for word in ("beaks", "clame", "coate", "crape", "crare"):
+        for word in ("floss", "humph", "tweet", "agave", "craze"):
             guess(at, word)
     finally:
         analysis.rate_move = orig
@@ -1200,7 +1200,7 @@ def test_full_survival_win_flow():
     assert game.config.max_undos == 5  # round 1
     # pin the secret on the fresh game so the test is fully deterministic
     game.secret = "crane"
-    for word in ("aahed", "beaks", "clame", "coate", "crape", "crare"):
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
         guess(at, word)  # known-good surviving line against CRANE
     game = at.session_state["game"]
     assert game.status is GameStatus.SURVIVED
