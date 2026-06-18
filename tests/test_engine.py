@@ -66,7 +66,7 @@ def test_consistency_secret_always_consistent_with_own_feedback():
 def test_word_lists_load_and_nest():
     allowed = words.allowed_guesses()
     ans = words.answers()
-    assert len(allowed) > 10_000
+    assert len(allowed) > 8_000
     assert len(ans) > 2_000
     assert set(ans) <= allowed
     assert all(len(w) == 5 and w.isalpha() and w.islower() for w in ans)

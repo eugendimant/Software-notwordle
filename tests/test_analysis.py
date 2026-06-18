@@ -51,7 +51,7 @@ def test_retained_matches_engine_pool():
 def test_rate_move_exact_small_pool():
     az = analyzer_for("en")
     g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
-    g.submit("aahed")  # shrinks pool to a few hundred
+    g.submit("poise")  # shrinks pool to a few hundred
     pool = list(g.remaining_words)
     word = next(w for w in pool if w != "crane")
     g.submit(word)
@@ -66,7 +66,7 @@ def test_rate_move_exact_small_pool():
 def test_rate_move_sampled_large_pool():
     az = analyzer_for("en")
     pool = az.words  # full 14,855-word opening pool
-    r = rate_move(az, "aahed", pool, "crane", rng=random.Random(2))
+    r = rate_move(az, "poise", pool, "crane", rng=random.Random(2))
     assert not r.exact
     assert r.pool_size == len(pool)
     assert r.best_retained >= r.retained
@@ -79,7 +79,7 @@ def test_rate_move_sampled_large_pool():
 def test_grades_cover_scale():
     az = analyzer_for("en")
     g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
-    g.submit("aahed")
+    g.submit("poise")
     pool = list(g.remaining_words)
     rs = [rate_move(az, w, pool, "crane") for w in pool[:30]]
     assert all(r.grade.split()[0] in "🟢🟡🟠🔴" for r in rs)
@@ -92,7 +92,7 @@ def test_opening_move_rating_is_fast_enough():
     az = analyzer_for("en")
     az.feedback_codes("crane", az._rows(az.words[:100]))  # warm caches
     t0 = time.perf_counter()
-    rate_move(az, "aahed", az.words, "crane", rng=random.Random(1))
+    rate_move(az, "poise", az.words, "crane", rng=random.Random(1))
     elapsed = time.perf_counter() - t0
     assert elapsed < 5.0, f"opening analysis took {elapsed:.2f}s"
 
@@ -215,7 +215,7 @@ def test_best_safe_hint_is_safe_and_beats_random():
     from avoidle.analysis import best_safe_hint
     az = analyzer_for("en")
     g = AvoidleGame("crane", W.allowed_guesses(), PRESETS["classic"])
-    g.submit("aahed")
+    g.submit("poise")
     pool = list(g.remaining_words)
     rng = random.Random(4)
     hint = best_safe_hint(az, pool, "crane", rng)

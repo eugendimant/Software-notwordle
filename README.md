@@ -146,6 +146,13 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.0** — **real words only**: every playable guess across all four
+  languages is now a genuine, definable word. The allowed-guess lists were
+  scrubbed of corpus-absent non-words (e.g. English "efits") using word
+  frequencies, so the duel bot can never put up a fake word and a typed
+  guess always has a meaning to look up. Secrets are untouched and the bot
+  keeps its full unpredictable strategy — it just can't reach a non-word.
+  (Offline cleaner: `tools/clean_wordlists.py`.)
 - **1.5.2.3** — definitions now speak your language: a **📖 row
   definition is glossed in whichever language you're playing** (German
   words explained in German, Spanish in Spanish, Russian in Russian),
