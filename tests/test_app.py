@@ -1678,6 +1678,45 @@ def test_global_floor_heals_after_a_wiped_store():
     assert s.bump_games() == 501
 
 
+def test_remembered_floor_heals_a_wiped_store_in_the_app():
+    # this browser remembers a high worldwide count; a fresh/wiped server
+    # file must be lifted back to it on the next read, never shown as zero
+    from avoidle.store import get_store
+    at = make_app()
+    at.session_state["global_seen"] = 999_001
+    at.session_state["_global_cache"] = None     # force a refresh
+    at.run()
+    assert not at.exception
+    assert get_store().games() >= 999_001
+    assert at.session_state["global_games"] >= 999_001
+
+
+def test_configured_floor_anchors_the_odometer(monkeypatch):
+    # a redeploy-surviving floor (env var / Streamlit secret) keeps the
+    # count from sliding back when the ephemeral file is wiped
+    import app as app_module
+    from avoidle.store import get_store
+    monkeypatch.setenv("AVOIDLE_GAMES_FLOOR", "999333")
+    assert app_module._games_floor() == 999_333
+    at = make_app()
+    assert get_store().games() >= 999_333
+    assert at.session_state["global_games"] >= 999_333
+
+
+def test_wiped_live_value_cannot_drop_below_remembered_floor(monkeypatch):
+    # a redeploy can knock the live server value down mid-session; the
+    # remembered floor must heal it back so the odometer never slides down
+    monkeypatch.setenv("AVOIDLE_GAMES_FLOOR", "0")
+    at = make_app()
+    at.session_state["global_seen"] = 444_222     # remembered worldwide max
+    at.session_state["global_games"] = 3          # a wiped mid-session value
+    at.session_state["_global_cache"] = None      # force a refresh
+    at.run()
+    assert not at.exception
+    assert at.session_state["global_games"] >= 444_222   # healed back up
+    assert at.session_state["global_seen"] >= 444_222
+
+
 def test_roulette_wheel_never_repeats_back_to_back():
     import random as _random
     at = make_app()

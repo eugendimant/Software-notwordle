@@ -146,6 +146,17 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.1** — **the worldwide counter never resets again**: the default
+  SQLite file lives on ephemeral disk and is wiped on every redeploy, and
+  a stale save could overwrite the browser's remembered count with a low
+  value — so the odometer occasionally fell back to 0. The remembered
+  floor is now strictly **monotonic** (never saved lower than seen),
+  **healed on every read** (a wiped file is lifted straight back), and
+  anchored by an optional **`AVOIDLE_GAMES_FLOOR`** env var / Streamlit
+  secret (secrets survive redeploys). For *full* permanence set
+  **`DATABASE_URL`** to a free external Postgres (Neon/Supabase) — the
+  store switches to it automatically. *(To restore your ~70: set
+  `AVOIDLE_GAMES_FLOOR = "70"` in Streamlit secrets.)*
 - **1.5.3.0** — **real words only**: every playable guess across all four
   languages is now a genuine, definable word. The allowed-guess lists were
   scrubbed of corpus-absent non-words (e.g. English "efits") using word
