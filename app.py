@@ -12,6 +12,7 @@ import datetime
 import functools
 import html
 import json
+import os
 import random
 import re
 import sys
@@ -28,7 +29,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.3.0"
+_EXPECTED_CORE_VERSION = "1.5.3.1"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -211,6 +212,7 @@ def init_state() -> None:
     ss.setdefault("nickname", "")          # active save slot ("" = guest)
     ss.setdefault("games_total", 0)        # this profile's finished games
     ss.setdefault("global_games", None)    # everyone's, from the server DB
+    ss.setdefault("global_seen", 0)        # highest worldwide count seen (floor)
     ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
     ss.setdefault("timer_on", False)       # per-play countdown on/off
     ss.setdefault("turn_seconds", TURN_SECONDS)  # chosen seconds per play
@@ -335,28 +337,69 @@ def _store():
         return None
 
 
-def _bump_global_games() -> None:
+def _games_floor() -> int:
+    """A durable minimum for the worldwide odometer. The default SQLite
+    file lives on ephemeral disk and is wiped on every redeploy; set
+    ``AVOIDLE_GAMES_FLOOR`` (env var or Streamlit secret — both survive
+    redeploys) so the count can never slide back below a known value. For
+    full permanence, set ``DATABASE_URL`` to an external database."""
+    raw = os.environ.get("AVOIDLE_GAMES_FLOOR", "").strip()
+    if not raw:
+        try:
+            raw = str(st.secrets.get("AVOIDLE_GAMES_FLOOR", "")).strip()
+        except Exception:
+            raw = ""
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _known_floor() -> int:
+    """The highest worldwide count this session can prove: the configured
+    floor, this browser's remembered count, the profile's own games, and
+    the last server reading. The odometer must never display below it."""
     ss = st.session_state
+    return max(_games_floor(),
+              int(ss.get("global_seen") or 0),
+              int(ss.get("games_total") or 0),
+              int(ss.get("global_games") or 0))
+
+
+def _remember_global(value) -> None:
+    """Record a fresh server reading as the new monotonic floor."""
+    ss = st.session_state
+    if isinstance(value, int) and value >= 0:
+        ss.global_games = value
+        ss.global_seen = max(int(ss.get("global_seen") or 0), value)
+
+
+def _bump_global_games() -> None:
     try:
         s = _store()
         if s:
-            ss.global_games = s.bump_games(1)
+            # heal a wiped file back to the proven floor BEFORE counting up,
+            # so a redeploy can never drop the number mid-session
+            s.raise_games_floor(_known_floor())
+            _remember_global(s.bump_games(1))
     except Exception:
         pass
 
 
 def _heal_global_floor(*candidates) -> None:
-    """The worldwide odometer must never go backward: if a returning
-    visitor's cookie remembers a higher count than the server (fresh
-    file after a redeploy), lift the server to it. Self-healing, no
-    setup required."""
-    floor = max([c for c in candidates if isinstance(c, int)] or [0])
+    """The worldwide odometer must never go backward: lift the server to
+    the highest count we can prove (cookie floor after a redeploy wiped
+    the file, configured floor, this profile's own games). Self-healing."""
+    ss = st.session_state
+    ss.global_seen = max([int(ss.get("global_seen") or 0)]
+                         + [c for c in candidates if isinstance(c, int)])
+    floor = _known_floor()
     if floor <= 0:
         return
     try:
         s = _store()
         if s:
-            st.session_state.global_games = s.raise_games_floor(floor)
+            _remember_global(s.raise_games_floor(floor))
     except Exception:
         pass
 
@@ -1094,7 +1137,7 @@ def encode_progress() -> str:
     payload = {"app": "avoidle", "version": __version__,
                "stats": ss.stats, "survival_best": ss.survival_best,
                "xp": ss.xp, "games_total": ss.get("games_total", 0),
-               "global_seen": ss.get("global_games") or 0,
+               "global_seen": _known_floor(),  # monotonic: never saved lower
                "achievements": sorted(ss.achievements),
                "daily_streaks": ss.daily_streaks,
                "daily_done": _recent(ss.daily_done, 30),
@@ -1134,6 +1177,11 @@ def apply_progress(payload: dict, merge_counter: bool = False) -> None:
     ss.daily_done = payload["daily_done"]
     ss.daily_win_dates = payload["daily_win_dates"]
     ss.wins_langs, ss.wins_lengths = derive_session_wins(payload["stats"])
+    # the remembered worldwide floor only ever rises (so a wiped server
+    # file can be healed back, and a stale save can't knock it down)
+    ss.global_seen = max(int(ss.get("global_seen") or 0),
+                         int(payload.get("global_seen", 0) or 0),
+                         int(ss.games_total or 0))
 
 
 def _pack_game_core(game: AvoidleGame) -> dict:
@@ -2435,11 +2483,13 @@ def main() -> None:
             try:
                 s = _store()
                 if s:
-                    ss.global_games = s.games()
+                    # heal-on-read: lift a wiped/fresh file back to the proven
+                    # floor, then take the value — so a redeploy never shows 0
+                    _remember_global(s.raise_games_floor(_known_floor()))
             except Exception:
                 pass
             ss._global_cache = (time.time(), ss.get("global_games"))
-        shown_global = max(ss.get("global_games") or 0, ss.games_total)
+        shown_global = max(int(ss.get("global_games") or 0), _known_floor())
         st.markdown(
             f'<div class="dw-odometer">🌍 <b>{shown_global:,}</b> games '
             'played — by everyone, ever</div>', unsafe_allow_html=True)
