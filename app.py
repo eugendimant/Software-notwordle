@@ -29,7 +29,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.3.1"
+_EXPECTED_CORE_VERSION = "1.5.3.2"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -213,6 +213,8 @@ def init_state() -> None:
     ss.setdefault("games_total", 0)        # this profile's finished games
     ss.setdefault("global_games", None)    # everyone's, from the server DB
     ss.setdefault("global_seen", 0)        # highest worldwide count seen (floor)
+    ss.setdefault("duel_wins", 0)          # remembered duel-winrate floor
+    ss.setdefault("duel_total", 0)
     ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
     ss.setdefault("timer_on", False)       # per-play countdown on/off
     ss.setdefault("turn_seconds", TURN_SECONDS)  # chosen seconds per play
@@ -404,6 +406,61 @@ def _heal_global_floor(*candidates) -> None:
         pass
 
 
+# the duel human-win-rate stat starts near this ratio and then drifts with
+# real results. Override with AVOIDLE_DUEL_SEED="wins/total" (env/secret).
+DUEL_SEED_WINS = 32
+DUEL_SEED_TOTAL = 100
+
+
+def _duel_seed() -> tuple[int, int]:
+    """Starting (wins, total) so the human duel win-rate begins near 32%."""
+    raw = os.environ.get("AVOIDLE_DUEL_SEED", "").strip()
+    if not raw:
+        try:
+            raw = str(st.secrets.get("AVOIDLE_DUEL_SEED", "")).strip()
+        except Exception:
+            raw = ""
+    if "/" in raw:
+        try:
+            w, t = (int(x) for x in raw.split("/", 1))
+            if 0 <= w <= t and t > 0:
+                return w, t
+        except (TypeError, ValueError):
+            pass
+    return DUEL_SEED_WINS, DUEL_SEED_TOTAL
+
+
+def _known_duel_floor() -> tuple[int, int]:
+    """The proven duel tally: the seed and this browser's remembered
+    counts, clamped so wins never exceed total (no >100%)."""
+    ss = st.session_state
+    sw, stot = _duel_seed()
+    total = max(stot, int(ss.get("duel_total") or 0))
+    wins = min(max(sw, int(ss.get("duel_wins") or 0)), total)
+    return wins, total
+
+
+def _remember_duel(wins, total) -> None:
+    """Record a fresh server reading as the new monotonic duel floor."""
+    ss = st.session_state
+    if isinstance(wins, int) and isinstance(total, int) and total >= 0:
+        ss.duel_total = max(int(ss.get("duel_total") or 0), total)
+        ss.duel_wins = min(max(int(ss.get("duel_wins") or 0), wins),
+                           ss.duel_total)
+
+
+def _record_duel(human_won: bool) -> None:
+    """Tally one finished duel into the worldwide win-rate stat."""
+    try:
+        s = _store()
+        if s:
+            fw, ft = _known_duel_floor()
+            s.raise_duel_floor(fw, ft)        # seed/heal before counting up
+            _remember_duel(*s.bump_duel(bool(human_won)))
+    except Exception:
+        pass
+
+
 def mode_stats(mode: str) -> dict:
     ss = st.session_state
     key = f"{mode}:{ss.lang}:{ss.word_len}"
@@ -426,6 +483,8 @@ def record_result_if_final(force: bool = False) -> None:
     # replays) and only ever go up — never reset
     ss.games_total = min(ss.get("games_total", 0) + 1, NUM_CAP)
     _bump_global_games()
+    if ss.mode == "duel":   # feed the worldwide human-vs-AI win-rate stat
+        _record_duel(player_won(game, "duel"))
     # the session recap lists every finished game (even daily practice
     # replays, which are excluded from stats/XP below)
     ss.session_log = (ss.session_log + [{
@@ -1138,6 +1197,8 @@ def encode_progress() -> str:
                "stats": ss.stats, "survival_best": ss.survival_best,
                "xp": ss.xp, "games_total": ss.get("games_total", 0),
                "global_seen": _known_floor(),  # monotonic: never saved lower
+               "duel_wins": _known_duel_floor()[0],   # worldwide win-rate floor
+               "duel_total": _known_duel_floor()[1],
                "achievements": sorted(ss.achievements),
                "daily_streaks": ss.daily_streaks,
                "daily_done": _recent(ss.daily_done, 30),
@@ -1182,6 +1243,9 @@ def apply_progress(payload: dict, merge_counter: bool = False) -> None:
     ss.global_seen = max(int(ss.get("global_seen") or 0),
                          int(payload.get("global_seen", 0) or 0),
                          int(ss.games_total or 0))
+    # the duel win-rate floor only ever rises (heals a wiped server tally)
+    _remember_duel(int(payload.get("duel_wins", 0) or 0),
+                   int(payload.get("duel_total", 0) or 0))
 
 
 def _pack_game_core(game: AvoidleGame) -> dict:
@@ -1534,6 +1598,8 @@ def parse_stats_json(text: str) -> dict | None:
                 "xp": _num(data.get("xp", 0), ACH.XP_CAP),
                 "games_total": _num(data.get("games_total", 0)),
                 "global_seen": _num(data.get("global_seen", 0)),
+                "duel_wins": _num(data.get("duel_wins", 0)),
+                "duel_total": _num(data.get("duel_total", 0)),
                 "achievements": achievements,
                 "daily_streaks": streaks,
                 "daily_done": done,
@@ -2486,6 +2552,8 @@ def main() -> None:
                     # heal-on-read: lift a wiped/fresh file back to the proven
                     # floor, then take the value — so a redeploy never shows 0
                     _remember_global(s.raise_games_floor(_known_floor()))
+                    fw, ft = _known_duel_floor()
+                    _remember_duel(*s.raise_duel_floor(fw, ft))
             except Exception:
                 pass
             ss._global_cache = (time.time(), ss.get("global_games"))
@@ -2493,6 +2561,12 @@ def main() -> None:
         st.markdown(
             f'<div class="dw-odometer">🌍 <b>{shown_global:,}</b> games '
             'played — by everyone, ever</div>', unsafe_allow_html=True)
+        d_wins, d_total = _known_duel_floor()
+        if d_total > 0:
+            pct = round(100 * d_wins / d_total)
+            st.markdown(
+                f'<div class="dw-odometer">⚔️ humans win <b>{pct}%</b> of '
+                'duels vs the AI</div>', unsafe_allow_html=True)
         st.link_button("💬 Suggest a feature",
                        "mailto:edimant@sas.upenn.edu"
                        "?subject=Avoidle%20feature%20idea",

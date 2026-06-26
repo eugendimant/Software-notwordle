@@ -146,6 +146,12 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.2** — **⚔️ worldwide duel win-rate**: under the games odometer
+  the sidebar now shows what share of duels humans win against the AI, as
+  a single percentage (no counts). It starts near **32%** and every
+  finished duel nudges it. Same durable-floor design as the odometer
+  (monotonic cookie + heal-on-read; seed overridable with
+  `AVOIDLE_DUEL_SEED="wins/total"`).
 - **1.5.3.1** — **the worldwide counter never resets again**: the default
   SQLite file lives on ephemeral disk and is wiped on every redeploy, and
   a stale save could overwrite the browser's remembered count with a low
