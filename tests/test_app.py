@@ -1717,6 +1717,29 @@ def test_wiped_live_value_cannot_drop_below_remembered_floor(monkeypatch):
     assert at.session_state["global_seen"] >= 444_222
 
 
+def test_duel_winrate_line_renders_and_seeds_near_32():
+    import app as app_module
+    at = make_app()
+    blob = " ".join(str(md.value) for md in at.sidebar.markdown)
+    assert "of duels vs the AI" in blob          # the worldwide stat shows
+    assert app_module._duel_seed() == (32, 100)  # seeds near 32%
+    # before any real duel the displayed rate is the seed (~32%)
+    assert "32%" in blob or "31%" in blob or "33%" in blob
+
+
+def test_finishing_a_duel_records_into_the_winrate():
+    from avoidle.store import get_store
+    at = make_app()
+    at.radio(key="mode_label").set_value("🆚 Duel").run()
+    before_w, before_t = get_store().duel_counts()
+    game = at.session_state["game"]
+    guess(at, game.secret)        # human says the word -> loses the duel, final
+    assert at.session_state["game"].is_over
+    after_w, after_t = get_store().duel_counts()
+    assert after_t == before_t + 1        # one more duel tallied
+    assert after_w == before_w            # human lost -> wins unchanged
+
+
 def test_roulette_wheel_never_repeats_back_to_back():
     import random as _random
     at = make_app()

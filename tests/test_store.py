@@ -55,6 +55,15 @@ def test_get_store_uses_env_path_and_is_a_singleton():
     assert "avoidle-test" in getattr(s1, "path", "")  # conftest's tmp db
 
 
+def test_duel_tally_counts_floors_and_never_lowers():
+    s = fresh_store()
+    assert s.duel_counts() == (0, 0)
+    assert s.raise_duel_floor(32, 100) == (32, 100)    # seed near 32%
+    assert s.bump_duel(True) == (33, 101)              # a human win
+    assert s.bump_duel(False) == (33, 102)             # a human loss
+    assert s.raise_duel_floor(10, 50) == (33, 102)     # never lowers a real count
+
+
 def test_leaderboard_ranks_by_xp_then_wins():
     s = fresh_store()
     s.save_profile("amy", "t", xp=300, wins=3)

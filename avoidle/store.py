@@ -33,6 +33,8 @@ _LOCK = threading.Lock()
 _STORE = None
 
 GLOBAL_GAMES_KEY = "global_games"
+DUEL_WINS_KEY = "duel_human_wins"   # finished duels won by the human
+DUEL_TOTAL_KEY = "duel_total"       # finished duels, total
 
 
 class SqliteStore:
@@ -91,6 +93,41 @@ class SqliteStore:
             row = c.execute("SELECT value FROM meta WHERE key = ?",
                             (GLOBAL_GAMES_KEY,)).fetchone()
             return int(row[0]) if row else 0
+
+    def _duel(self, c) -> tuple[int, int]:
+        rows = dict((r[0], r[1]) for r in c.execute(
+            "SELECT key, value FROM meta WHERE key IN (?, ?)",
+            (DUEL_WINS_KEY, DUEL_TOTAL_KEY)).fetchall())
+        return int(rows.get(DUEL_WINS_KEY, 0)), int(rows.get(DUEL_TOTAL_KEY, 0))
+
+    def duel_counts(self) -> tuple[int, int]:
+        """(human_wins, total) finished duels — for the win-rate stat."""
+        with self._conn() as c:
+            return self._duel(c)
+
+    def bump_duel(self, human_won: bool) -> tuple[int, int]:
+        """Record one finished duel; returns the running (wins, total)."""
+        with _LOCK, self._conn() as c:
+            for key, inc in ((DUEL_TOTAL_KEY, 1),
+                             (DUEL_WINS_KEY, 1 if human_won else 0)):
+                c.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = value + ?",
+                    (key, inc, inc))
+            return self._duel(c)
+
+    def raise_duel_floor(self, wins: int, total: int) -> tuple[int, int]:
+        """Seed/heal the duel tally to at least these counts (so it starts
+        near the seed ratio and survives a wiped file), never lowering a
+        higher real count."""
+        with _LOCK, self._conn() as c:
+            for key, n in ((DUEL_WINS_KEY, int(wins)),
+                           (DUEL_TOTAL_KEY, int(total))):
+                c.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = MAX(value, ?)",
+                    (key, n, n))
+            return self._duel(c)
 
     def save_profile(self, nick: str, token: str,
                      xp: int = 0, wins: int = 0) -> None:
@@ -186,6 +223,49 @@ class SqlAlchemyStore:
                 "SELECT value FROM avoidle_meta WHERE key = :k"),
                 {"k": GLOBAL_GAMES_KEY}).fetchone()
             return int(row[0]) if row else 0
+
+    def _duel(self, c) -> tuple[int, int]:
+        sa = self._sa
+        rows = dict((r[0], r[1]) for r in c.execute(sa.text(
+            "SELECT key, value FROM avoidle_meta WHERE key IN (:w, :t)"),
+            {"w": DUEL_WINS_KEY, "t": DUEL_TOTAL_KEY}).fetchall())
+        return int(rows.get(DUEL_WINS_KEY, 0)), int(rows.get(DUEL_TOTAL_KEY, 0))
+
+    def duel_counts(self) -> tuple[int, int]:
+        with self.engine.connect() as c:
+            return self._duel(c)
+
+    def bump_duel(self, human_won: bool) -> tuple[int, int]:
+        sa = self._sa
+        with _LOCK, self.engine.begin() as c:
+            for key, inc in ((DUEL_TOTAL_KEY, 1),
+                             (DUEL_WINS_KEY, 1 if human_won else 0)):
+                done = c.execute(sa.text(
+                    "UPDATE avoidle_meta SET value = value + :n "
+                    "WHERE key = :k"), {"n": inc, "k": key})
+                if done.rowcount == 0:
+                    c.execute(sa.text(
+                        "INSERT INTO avoidle_meta (key, value) "
+                        "VALUES (:k, :n)"), {"n": inc, "k": key})
+            return self._duel(c)
+
+    def raise_duel_floor(self, wins: int, total: int) -> tuple[int, int]:
+        sa = self._sa
+        with _LOCK, self.engine.begin() as c:
+            for key, n in ((DUEL_WINS_KEY, int(wins)),
+                           (DUEL_TOTAL_KEY, int(total))):
+                cur = c.execute(sa.text(
+                    "SELECT value FROM avoidle_meta WHERE key = :k"),
+                    {"k": key}).fetchone()
+                if cur is None:
+                    c.execute(sa.text(
+                        "INSERT INTO avoidle_meta (key, value) "
+                        "VALUES (:k, :n)"), {"n": n, "k": key})
+                elif int(cur[0]) < n:
+                    c.execute(sa.text(
+                        "UPDATE avoidle_meta SET value = :n WHERE key = :k"),
+                        {"n": n, "k": key})
+            return self._duel(c)
 
     def save_profile(self, nick: str, token: str,
                      xp: int = 0, wins: int = 0) -> None:
