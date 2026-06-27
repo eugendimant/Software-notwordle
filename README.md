@@ -146,6 +146,15 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.3** — **counters stop resetting on deploy**: both worldwide
+  stats now carry a **baked-into-the-code floor** that ships with every
+  redeploy, instead of defaulting to 0/seed and relying only on the
+  (fragile) browser cookie. The games odometer is anchored at the real
+  current total (**`GAMES_FLOOR_BASELINE`**, ~80) and the duel win-rate at
+  its accumulated `(wins, total)` — both *bumped on each release* and only
+  ever raised, never lowered. An `AVOIDLE_GAMES_FLOOR` /
+  `AVOIDLE_DUEL_SEED` secret (or `DATABASE_URL`) still overrides for a
+  no-maintenance permanent count.
 - **1.5.3.2** — **⚔️ worldwide duel win-rate**: under the games odometer
   the sidebar now shows what share of duels humans win against the AI, as
   a single percentage (no counts). It starts near **32%** and every

@@ -29,7 +29,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.3.2"
+_EXPECTED_CORE_VERSION = "1.5.3.3"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -339,22 +339,39 @@ def _store():
         return None
 
 
+# ──────────────────────────────────────────────────────────────────────
+# Worldwide games floor — the real count so far, BAKED INTO THE CODE so it
+# ships with every redeploy. The default store is a SQLite file on
+# ephemeral disk that Streamlit Cloud wipes on every deploy; without a
+# floor in the code, each deploy reset the odometer toward 0.
+#
+# ⚠️ BUMP THIS on every release to the true current count (it must never
+# go DOWN). As of v1.5.3.3 the real worldwide total is ~80. Real games
+# played since then accumulate on top via the per-browser cookie and the
+# live store; this constant is the redeploy-proof floor underneath them.
+# (Set AVOIDLE_GAMES_FLOOR or DATABASE_URL to override/supersede it.)
+# ──────────────────────────────────────────────────────────────────────
+GAMES_FLOOR_BASELINE = 80
+
+
 def _games_floor() -> int:
-    """A durable minimum for the worldwide odometer. The default SQLite
-    file lives on ephemeral disk and is wiped on every redeploy; set
-    ``AVOIDLE_GAMES_FLOOR`` (env var or Streamlit secret — both survive
-    redeploys) so the count can never slide back below a known value. For
-    full permanence, set ``DATABASE_URL`` to an external database."""
+    """The durable minimum for the worldwide odometer: the baked-in
+    baseline, which an ``AVOIDLE_GAMES_FLOOR`` env var / Streamlit secret
+    can only RAISE (never lower). For full cross-device permanence, set
+    ``DATABASE_URL`` to an external database."""
+    floor = GAMES_FLOOR_BASELINE
     raw = os.environ.get("AVOIDLE_GAMES_FLOOR", "").strip()
     if not raw:
         try:
             raw = str(st.secrets.get("AVOIDLE_GAMES_FLOOR", "")).strip()
         except Exception:
             raw = ""
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        return 0
+    if raw:
+        try:
+            floor = max(floor, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return max(0, floor)
 
 
 def _known_floor() -> int:
@@ -406,8 +423,15 @@ def _heal_global_floor(*candidates) -> None:
         pass
 
 
-# the duel human-win-rate stat starts near this ratio and then drifts with
-# real results. Override with AVOIDLE_DUEL_SEED="wins/total" (env/secret).
+# Duel human-win-rate floor — BAKED INTO THE CODE so it ships with every
+# redeploy (same reason as GAMES_FLOOR_BASELINE: the ephemeral SQLite file
+# is wiped on each deploy). The displayed rate is wins/total.
+#
+# ⚠️ BUMP THESE on every release to the true accumulated (wins, total) so
+# the rate doesn't snap back to the bare seed after a wipe (must never go
+# DOWN). It started at 32/100 = 32%; real duels since then add on top via
+# the per-browser cookie + the live store. Override with
+# AVOIDLE_DUEL_SEED="wins/total" (env var / Streamlit secret).
 DUEL_SEED_WINS = 32
 DUEL_SEED_TOTAL = 100
 

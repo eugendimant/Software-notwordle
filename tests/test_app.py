@@ -1717,6 +1717,18 @@ def test_wiped_live_value_cannot_drop_below_remembered_floor(monkeypatch):
     assert at.session_state["global_seen"] >= 444_222
 
 
+def test_baked_in_floor_anchors_the_odometer_with_no_config(monkeypatch):
+    # with NO env var / secret, the code baseline (the real count, shipped
+    # with every redeploy) still keeps the odometer from sliding back to 0
+    monkeypatch.delenv("AVOIDLE_GAMES_FLOOR", raising=False)
+    import app as app_module
+    from avoidle.store import get_store
+    assert app_module._games_floor() >= 80
+    at = make_app()
+    assert get_store().games() >= 80
+    assert at.session_state["global_games"] >= 80
+
+
 def test_duel_winrate_line_renders_and_seeds_near_32():
     import app as app_module
     at = make_app()
