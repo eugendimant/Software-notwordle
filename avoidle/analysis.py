@@ -148,15 +148,26 @@ def rate_move(analyzer: Analyzer, played: str, pool_before: list[str],
     retained = analyzer.retained_counts(candidates, count_pool, secret)
     if scale != 1.0:
         retained = np.maximum(1, (retained * scale).round().astype(np.int64))
-    mine = retained[candidates.index(played)]
-    best_i = int(np.argmax(retained))
-    # mid-rank percentile among the *other* options: ties count half, so
-    # the worst move reads 0%, an all-tie field reads 50%
-    others = len(retained) - 1
-    if others > 0:
-        worse = int((retained < mine).sum())
-        ties = int((retained == mine).sum()) - 1  # exclude the move itself
-        percentile = 100.0 * (worse + 0.5 * ties) / others
+    played_idx = candidates.index(played)
+    mine = int(retained[played_idx])
+    # the secret can NEVER be the "best" alternative — naming it loses the
+    # game outright. Rank only among the safe candidates (≠ secret); the
+    # best move is the safe word that kept the most options alive.
+    safe = np.array([c != secret for c in candidates])
+    if safe.any():
+        safe_pos = np.where(safe)[0]
+        best_i = int(safe_pos[int(np.argmax(retained[safe_pos]))])
+    else:
+        best_i = int(np.argmax(retained))   # forced: only the secret remained
+    # mid-rank percentile among the *safe* alternatives (excluding the move
+    # itself): ties count half, so the worst move reads 0%, an all-tie field
+    # reads 50%, and a move is never flattered by "beating" the losing secret
+    alt = safe & (np.arange(len(candidates)) != played_idx)
+    n_alt = int(alt.sum())
+    if n_alt > 0:
+        worse = int((retained[alt] < mine).sum())
+        ties = int((retained[alt] == mine).sum())
+        percentile = 100.0 * (worse + 0.5 * ties) / n_alt
     else:
         percentile = 100.0
     reported = int(mine) if actual_retained is None else actual_retained

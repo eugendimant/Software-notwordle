@@ -29,7 +29,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.3.3"
+_EXPECTED_CORE_VERSION = "1.5.3.4"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -201,7 +201,8 @@ def init_state() -> None:
     ss.setdefault("stats", {})         # mode -> dict
     ss.setdefault("xp", 0)
     ss.setdefault("achievements", set())   # unlocked achievement ids
-    ss.setdefault("game_unlocks", [])      # banners for the end panel
+    ss.setdefault("game_unlocks", [])      # structured end-panel unlocks
+    ss.setdefault("last_xp_gain", 0)       # XP earned in the last game
     ss.setdefault("daily_streaks", {})     # "lang:len" -> {last, streak}
     ss.setdefault("wins_langs", set())
     ss.setdefault("wins_lengths", set())
@@ -272,6 +273,7 @@ def reset_game_view_state() -> None:
     ss.duel_read = None
     ss.kbd_buffer = ""
     ss.game_unlocks = []
+    ss.last_xp_gain = 0
     ss.bot_pending = False
     ss.last_action = None
     ss.spin_note = None
@@ -586,7 +588,7 @@ def _award_progress(game: AvoidleGame, stats: dict) -> None:
         if ACH.quest_completed(quest.id, ctx):
             quest_bonus = quest.xp
             ss.game_unlocks.append(
-                f"🎯 Side-quest complete: {quest.label} (+{quest.xp} XP)")
+                {"kind": "quest", "text": f"🎯 {quest.label}"})
         ss.daily_win_dates.add(f"{date_iso}:{ss.lang}:{ss.word_len}")
         # daily streak: consecutive calendar days per language+length
         skey = f"{ss.lang}:{ss.word_len}"
@@ -600,17 +602,17 @@ def _award_progress(game: AvoidleGame, stats: dict) -> None:
         ss.daily_streaks[skey] = entry
     gained = ACH.xp_for_game(ctx, len(fresh)) + quest_bonus
     ss.xp += gained
+    ss.last_xp_gain = gained
     for ach in fresh:
         ss.achievements.add(ach.id)
         ss.game_unlocks.append(
-            f"{ach.emoji} Achievement unlocked: **{ach.name}** — "
-            f"{ach.description} (+{ACH.UNLOCK_XP} XP)")
+            {"kind": "ach", "text": f"{ach.emoji} {ach.name}"})
         st.toast(f"{ach.emoji} {ach.name} unlocked!")
     after = ACH.level_for_xp(ss.xp)
     if after["level"] > before:
         ss.game_unlocks.append(
-            f"⭐ Level up! You are now level {after['level']} — "
-            f"*{after['title']}*")
+            {"kind": "level",
+             "text": f"⭐ Level {after['level']} · {after['title']}"})
         st.toast(f"⭐ Level {after['level']}: {after['title']}!")
 
 
@@ -1137,6 +1139,27 @@ def _duel_recursive_read(game: AvoidleGame) -> str | None:
                     f"a **forced win** — optimal play corners the bot in "
                     f"{plies // 2} of your move(s).")
     return None
+
+
+def _corners_bot(pool_before, played: str, secret: str) -> bool:
+    """In a duel, did this (safe) move leave the bot in a provable forced
+    loss? Such an aggressive, pool-shrinking play — which the raw rating
+    flags as 'risky' — is actually a winning squeeze. Only decidable when
+    the resulting pool is small enough for the endgame solver."""
+    from avoidle.endgame import (MAX_SOLVE_POOL, _next_pool,
+                                 forced_win_plies)
+    pb = tuple(sorted(set(pool_before)))
+    if played == secret or not (1 < len(pb) <= MAX_SOLVE_POOL):
+        return False
+    try:
+        nxt = _next_pool(pb, played, secret)
+    except Exception:
+        return False
+    if not (1 <= len(nxt) <= MAX_SOLVE_POOL):
+        return False
+    # forced_win_plies is from the bot's perspective (it's to move on nxt):
+    # None => the bot can't force a win => it's cornered into the secret
+    return forced_win_plies(nxt, secret) is None
 
 
 def _reseed_daily_rng(facility: str) -> None:
@@ -2839,8 +2862,14 @@ def main() -> None:
             if game.can_undo():
                 st.button("↩️ Undo that fatal guess!", on_click=act_undo,
                           type="primary")
-        for note in ss.game_unlocks:
-            st.success(note)
+        # one tidy banner — XP, any new achievements, side-quest and level
+        # up — instead of a stack of separate boxes
+        segs = []
+        if ss.get("last_xp_gain"):
+            segs.append(f"**+{ss.last_xp_gain:,} XP**")
+        segs += [u["text"] for u in ss.game_unlocks if isinstance(u, dict)]
+        if segs:
+            st.success("🎉  " + "  ·  ".join(segs))
         lv = ACH.level_for_xp(ss.xp)
         player_rows = ((game.guesses_made + 1) // 2
                        if ss.mode == "duel" else None)
@@ -2862,10 +2891,17 @@ def main() -> None:
             else:
                 if ss.get("duel_read"):
                     st.markdown(ss.duel_read)
-                rows = (game.history[0::2] if ss.mode == "duel"
-                        else game.history)
+                duel = ss.mode == "duel"
+                if duel:
+                    st.caption("In a duel, a low “kept” count can be **good** "
+                               "— shrinking the pool is how you corner the "
+                               "bot into saying the word.")
+                rows = game.history[0::2] if duel else game.history
                 for i, (t, r) in enumerate(zip(rows, ss.review), 1):
                     approx = "" if r.exact else " (best found by sampling)"
+                    grade = r.grade
+                    cornered = (duel and not r.fatal and _corners_bot(
+                        game.pool_before(2 * (i - 1)), r.word, game.secret))
                     if r.fatal and r.forced:
                         verdict = "**no way out — it was the only word left**"
                     elif r.fatal:
@@ -2874,6 +2910,10 @@ def main() -> None:
                             verdict += (f" — safe instead: "
                                         f"**{r.best_word.upper()}** (kept "
                                         f"{r.best_retained:,}){approx}")
+                    elif cornered:
+                        grade = "🟢 cornering"
+                        verdict = ("**a winning squeeze — corners the bot "
+                                   "into the word**")
                     elif r.word == r.best_word and r.pool_size > 1:
                         verdict = ("**perfect — nothing kept more**"
                                    if r.exact else
@@ -2883,7 +2923,7 @@ def main() -> None:
                                    f"would have kept **{r.best_retained:,}**"
                                    f"{approx}")
                     st.markdown(
-                        f"{i}. {r.grade} — **{r.word.upper()}** kept "
+                        f"{i}. {grade} — **{r.word.upper()}** kept "
                         f"**{r.retained:,}** of {r.pool_size:,} · {verdict}")
         if ss.mode == "survival" and game.status is GameStatus.SURVIVED:
             st.button(f"⚔️ Next round ({ss.survival_round + 1}) →",
