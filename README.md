@@ -146,6 +146,15 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.4** — **smarter, tidier post-game feedback**: (1) the best-move
+  review never suggests the **hidden word** as a "better" alternative
+  anymore (it would have *lost* the game) — the best move is always the
+  safest real word, and the percentile ranks only safe options; (2) in a
+  **duel**, a pool-shrinking "risky" move that provably **corners the bot**
+  is now recognised as a 🟢 *cornering* winning squeeze instead of being
+  scolded, with a note that a low "kept" count is good when it traps the
+  opponent; (3) the stack of per-achievement / level-up banners is
+  **collapsed into one tidy banner** (`+XP · 🏆 names · ⭐ level`).
 - **1.5.3.3** — **counters stop resetting on deploy**: both worldwide
   stats now carry a **baked-into-the-code floor** that ships with every
   redeploy, instead of defaulting to 0/seed and relying only on the

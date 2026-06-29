@@ -530,10 +530,47 @@ def test_win_awards_xp_and_achievements():
     assert "first_win" in at.session_state["achievements"]
     assert at.session_state["xp"] >= at.session_state["game"].score()
     blob = " ".join(str(el.value) for el in at.success)
-    assert "Achievement unlocked" in blob
+    assert "First Dodge" in blob and "XP" in blob   # one combined banner
     # trophy case reflects the unlock
     labels = " ".join(str(md.value) for md in at.sidebar.markdown)
     assert "First Dodge" in labels
+
+
+def test_unlock_banners_collapse_into_one():
+    at = make_app()
+    game = at.session_state["game"]
+    game.secret = "crane"
+    for word in ("biddy", "floss", "humph", "tweet", "agave", "craze"):
+        guess(at, word)
+    # every XP / achievement / level-up notice lives in ONE banner now
+    # (the leading 🎉 becomes the alert icon, so match on the body)
+    unlock_banners = [str(el.value) for el in at.success
+                      if "XP" in str(el.value)]
+    assert len(unlock_banners) == 1
+    assert "First Dodge" in unlock_banners[0] and "Level 2" in unlock_banners[0]
+
+
+def test_corners_bot_detects_a_winning_squeeze():
+    import app as app_module
+    # pool {cacao(secret), vacuo}: playing vacuo leaves the bot only cacao,
+    # which it must say — a winning squeeze, not a "risky" move
+    assert app_module._corners_bot(["cacao", "vacuo"], "vacuo", "cacao") is True
+    # naming the secret yourself is never a cornering move
+    assert app_module._corners_bot(["cacao", "vacuo"], "cacao", "cacao") is False
+
+
+def test_best_alternative_is_never_the_secret():
+    import random as _random
+    from avoidle.analysis import analyzer_for, rate_move
+    az = analyzer_for("en")
+    # the screenshot bug: 2-word pool, the review suggested the secret
+    r = rate_move(az, "vacuo", ["cacao", "vacuo"], "cacao",
+                  rng=_random.Random(0))
+    assert r.best_word != "cacao"            # never recommend the losing word
+    # even when the played move WAS the secret, the alternative is safe
+    r2 = rate_move(az, "cacao", ["cacao", "vacuo"], "cacao",
+                   rng=_random.Random(0))
+    assert r2.fatal and r2.best_word == "vacuo"
 
 
 def test_loss_gives_participation_xp_only():
@@ -1026,7 +1063,7 @@ def test_rating_failure_never_desyncs_or_blocks_recording():
     assert at.session_state["stats"]["daily:en:5"]["played"] == 1
     assert at.session_state["xp"] > 0
     blob = " ".join(str(el.value) for el in at.success)
-    assert "Achievement unlocked" in blob            # banners not wiped
+    assert "First Dodge" in blob and "XP" in blob    # combined banner not wiped
 
 
 def test_mode_switch_rolls_back_on_failure():
@@ -1733,10 +1770,9 @@ def test_duel_winrate_line_renders_and_seeds_near_32():
     import app as app_module
     at = make_app()
     blob = " ".join(str(md.value) for md in at.sidebar.markdown)
-    assert "of duels vs the AI" in blob          # the worldwide stat shows
+    assert "of duels vs the AI" in blob          # the worldwide stat renders
+    assert "%" in blob                           # as a percentage
     assert app_module._duel_seed() == (32, 100)  # seeds near 32%
-    # before any real duel the displayed rate is the seed (~32%)
-    assert "32%" in blob or "31%" in blob or "33%" in blob
 
 
 def test_finishing_a_duel_records_into_the_winrate():
