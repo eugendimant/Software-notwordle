@@ -1754,6 +1754,19 @@ def test_wiped_live_value_cannot_drop_below_remembered_floor(monkeypatch):
     assert at.session_state["global_seen"] >= 444_222
 
 
+def test_github_published_count_anchors_the_odometer(monkeypatch):
+    # the durable count read back from GitHub is the source of truth that
+    # survives sleep/wake — it lifts the worldwide floor on every startup
+    import avoidle.ghcount as _gh
+    from avoidle.store import get_store
+    monkeypatch.setattr(_gh, "read_count", lambda: 777_888)
+    monkeypatch.setattr(_gh, "publish", lambda n: True)
+    at = make_app()
+    assert at.session_state["gh_count"] >= 777_888
+    assert get_store().games() >= 777_888
+    assert at.session_state["global_games"] >= 777_888
+
+
 def test_baked_in_floor_anchors_the_odometer_with_no_config(monkeypatch):
     # with NO env var / secret, the code baseline (the real count, shipped
     # with every redeploy) still keeps the odometer from sliding back to 0

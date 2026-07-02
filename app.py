@@ -29,7 +29,7 @@ import streamlit.components.v1 as components
 # real production errors. If versions disagree, evict the cached
 # package so the imports below load the matching code.
 # ----------------------------------------------------------------------
-_EXPECTED_CORE_VERSION = "1.5.3.4"
+_EXPECTED_CORE_VERSION = "1.5.3.5"
 try:
     import avoidle as _core_probe
     if getattr(_core_probe, "__version__", None) != _EXPECTED_CORE_VERSION:
@@ -44,6 +44,7 @@ from avoidle import achievements as ACH
 from avoidle import bot as BOT
 from avoidle import analysis as A
 from avoidle import definitions as DEF
+from avoidle import ghcount as GH
 from avoidle import words as W
 from avoidle.engine import (
     GRAY,
@@ -214,6 +215,7 @@ def init_state() -> None:
     ss.setdefault("games_total", 0)        # this profile's finished games
     ss.setdefault("global_games", None)    # everyone's, from the server DB
     ss.setdefault("global_seen", 0)        # highest worldwide count seen (floor)
+    ss.setdefault("gh_count", 0)           # durable count published on GitHub
     ss.setdefault("duel_wins", 0)          # remembered duel-winrate floor
     ss.setdefault("duel_total", 0)
     ss.setdefault("pending_cookie_saves", {})  # profile saves to flush
@@ -347,13 +349,13 @@ def _store():
 # ephemeral disk that Streamlit Cloud wipes on every deploy; without a
 # floor in the code, each deploy reset the odometer toward 0.
 #
-# ⚠️ BUMP THIS on every release to the true current count (it must never
-# go DOWN). As of v1.5.3.3 the real worldwide total is ~80. Real games
-# played since then accumulate on top via the per-browser cookie and the
-# live store; this constant is the redeploy-proof floor underneath them.
-# (Set AVOIDLE_GAMES_FLOOR or DATABASE_URL to override/supersede it.)
+# This is only the OFFLINE fallback now: the live count is published to
+# and read back from GitHub (see avoidle/ghcount.py), which is the durable
+# source of truth that survives sleep/wake and redeploys. This baseline is
+# used when GitHub can't be reached. As of v1.5.3.5 the real total is ~95.
+# (Set AVOIDLE_GAMES_FLOOR or DATABASE_URL to override it too.)
 # ──────────────────────────────────────────────────────────────────────
-GAMES_FLOOR_BASELINE = 80
+GAMES_FLOOR_BASELINE = 95
 
 
 def _games_floor() -> int:
@@ -382,9 +384,33 @@ def _known_floor() -> int:
     the last server reading. The odometer must never display below it."""
     ss = st.session_state
     return max(_games_floor(),
+              int(ss.get("gh_count") or 0),        # durable GitHub count
               int(ss.get("global_seen") or 0),
               int(ss.get("games_total") or 0),
               int(ss.get("global_games") or 0))
+
+
+def _sync_gh_count(publish: bool = False) -> None:
+    """Keep the durable GitHub count in step: read it (cached ~45 s) as the
+    floor, and — when we've counted past it — publish the new total back to
+    the repo so it survives the next sleep/wake. All best-effort."""
+    ss = st.session_state
+    now = time.time()
+    if now - float(ss.get("_gh_read_at") or 0) > 45:
+        ss._gh_read_at = now
+        try:
+            ss.gh_count = max(int(ss.get("gh_count") or 0), GH.read_count())
+        except Exception:
+            pass
+    if publish and now - float(ss.get("_gh_write_at") or 0) > 25:
+        floor = _known_floor()
+        if floor > int(ss.get("gh_count") or 0):
+            ss._gh_write_at = now
+            try:
+                if GH.publish(floor):
+                    ss.gh_count = floor
+            except Exception:
+                pass
 
 
 def _remember_global(value) -> None:
@@ -2593,6 +2619,9 @@ def main() -> None:
         # Refreshed from the shared store at most every 30 s per session.
         cache = ss.get("_global_cache")
         if cache is None or time.time() - cache[0] > 30:
+            # durable source of truth: pull the count published on GitHub
+            # (survives sleep/wake) and push ours back if we've counted past
+            _sync_gh_count(publish=True)
             try:
                 s = _store()
                 if s:
