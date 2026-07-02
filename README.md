@@ -146,6 +146,14 @@ python -m pytest
 
 ## Changelog
 
+- **1.5.3.5** — **the games counter is now durable via GitHub**: the app
+  publishes the worldwide total to `games_count.txt` on a **`game-stats`
+  side branch** and reads it back on every startup, so it survives
+  Streamlit Cloud sleeping/waking and redeploys (which wipe the local
+  file). Reads are public (no token); to let the count **keep updating**,
+  add a `GITHUB_TOKEN` secret (fine-grained PAT, *Contents: read/write* on
+  this repo) — writes go to the side branch only, so they never trigger a
+  redeploy. Recovered to ~95. See `avoidle/ghcount.py`.
 - **1.5.3.4** — **smarter, tidier post-game feedback**: (1) the best-move
   review never suggests the **hidden word** as a "better" alternative
   anymore (it would have *lost* the game) — the best move is always the

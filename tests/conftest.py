@@ -22,3 +22,15 @@ def _offline(url):
 
 
 _definitions._http_get = _offline
+
+# The GitHub-backed games counter must not reach the network during tests
+# either — the sidebar renders on every AppTest run. Tests that exercise it
+# monkeypatch ``_http`` (or read_count/publish) themselves.
+import avoidle.ghcount as _ghcount  # noqa: E402
+
+
+def _gh_offline(url, headers, data=None, method=None):
+    raise OSError("network disabled in tests")
+
+
+_ghcount._http = _gh_offline
